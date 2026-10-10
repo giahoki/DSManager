@@ -1,0 +1,42 @@
+#pragma code_page(65001)
+#include <winver.h>
+#include "version.h"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION     DSM_VERSION_MAJOR, DSM_VERSION_MINOR, DSM_VERSION_PATCH, 0
+ PRODUCTVERSION  DSM_VERSION_MAJOR, DSM_VERSION_MINOR, DSM_VERSION_PATCH, 0
+ FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+ FILEFLAGS       0
+ FILEOS          VOS_NT_WINDOWS32
+ FILETYPE        VFT_APP
+ FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041904B0"
+        BEGIN
+            VALUE "CompanyName",      "giahoki"
+            VALUE "FileDescription",  "DSM — Dark Souls Mod Manager"
+            VALUE "FileVersion",      DSM_VERSION
+            VALUE "InternalName",     "DSM"
+            VALUE "LegalCopyright",   "© 2026 giahoki · PolyForm Noncommercial 1.0.0"
+            VALUE "OriginalFilename", "DSM.exe"
+            VALUE "ProductName",      "DSM — Dark Souls Mod Manager"
+            VALUE "ProductVersion",   DSM_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0419, 1200
+    END
+END
+
+// App icon (exe, taskbar, window). GLFW picks up the resource named GLFW_ICON for its windows.
+GLFW_ICON ICON "..\\assets\\icons\\DSM.ico"
+
+// Fonts and pictures live inside the exe, so DSM is a single file plus its data\ and mods\.
+FONT_SEMIBOLD RCDATA "..\\assets\\fonts\\CormorantGaramond-SemiBold.ttf"
+FONT_BOLD     RCDATA "..\\assets\\fonts\\CormorantGaramond-Bold.ttf"
+FONT_ITALIC   RCDATA "..\\assets\\fonts\\CormorantGaramond-MediumItalic.ttf"
+FONT_SC       RCDATA "..\\assets\\fonts\\CormorantSC-SemiBold.ttf"
+LOGO_DSR      RCDATA "..\\assets\\icons\\DS R logo.png"

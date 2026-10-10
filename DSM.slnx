@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="DSM.vcxproj" Id="204702b0-d4e5-4476-a01e-6ae9d7265ce0" />
+  <Project Path="engine/DSUEngine.vcxproj" Id="6b1f3c2a-9d47-4e0b-8a35-2f6c1d9e7b41" />
+</Solution>

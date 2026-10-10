@@ -1,0 +1,21 @@
+# Visual Studio and build output (bin\ also gets a copy of mods\ and DSM's data\ next to the exe)
+.vs/
+bin/
+build/
+dist/
+*.user
+*.pdb
+*.ilk
+*.obj
+
+# DSM's runtime state if it ever ends up in the root (it lives in bin\data): enabled mods and backups of the original game files
+data/
+
+# Parts of the GLFW release the project does not use
+external/glfw/docs/
+external/glfw/lib-mingw-w64/
+external/glfw/lib-static-ucrt/
+external/glfw/lib-vc2013/
+external/glfw/lib-vc2015/
+external/glfw/lib-vc2017/
+external/glfw/lib-vc2019/

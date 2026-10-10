@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{204702b0-d4e5-4476-a01e-6ae9d7265ce0}</ProjectGuid>
+    <RootNamespace>DSM</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)bin\</OutDir>
+    <IntDir>$(ProjectDir)build\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <TargetName>DSM_debug</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <TargetName>DSM</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)external\glfw\include;$(ProjectDir)external\stb;$(ProjectDir)external\json;$(ProjectDir)external\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(ProjectDir)external\glfw\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;gdi32.lib;user32.lib;shell32.lib;ole32.lib;advapi32.lib;dwmapi.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- symbols (.pdb) only in Debug: Release ships nothing but the binary -->
+      <GenerateDebugInformation Condition="'$(Configuration)'=='Debug'">true</GenerateDebugInformation>
+      <GenerateDebugInformation Condition="'$(Configuration)'=='Release'">false</GenerateDebugInformation>
+    </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
+    <!-- VS keeps its build log open during Clean; outside build\ it can't block removing that folder -->
+    <BuildLog>
+      <Path>$(TEMP)\DSM-$(Configuration).log</Path>
+    </BuildLog>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <IgnoreSpecificDefaultLibraries>msvcrt.lib</IgnoreSpecificDefaultLibraries>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\gl.cpp" />
+    <ClCompile Include="src\render.cpp" />
+    <ClCompile Include="src\modmanager.cpp" />
+    <ClCompile Include="src\game.cpp" />
+    <ClCompile Include="src\util.cpp" />
+    <ClCompile Include="src\stb_impl.cpp" />
+    <ClCompile Include="src\patch.cpp" />
+    <ClCompile Include="external\miniz\miniz.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\gl.h" />
+    <ClInclude Include="src\render.h" />
+    <ClInclude Include="src\modmanager.h" />
+    <ClInclude Include="src\game.h" />
+    <ClInclude Include="src\util.h" />
+    <ClInclude Include="src\version.h" />
+    <ClInclude Include="src\patch.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\DSM.rc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- DSM is portable: mods\ and data\ sit next to the exe.
+       mods\ is kept in the project root and copied into bin\ on every build.
+       data\ (enabled mods, backups of the original game files) is runtime state next to the exe;
+       Clean deletes the whole bin\ with it. -->
+  <Target Name="DSMDeployRuntime" AfterTargets="Build">
+    <ItemGroup>
+      <DSMModFiles Include="$(ProjectDir)mods\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DSMModFiles)" DestinationFiles="@(DSMModFiles->'$(OutDir)mods\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="DSMCleanAll" AfterTargets="Clean">
+    <!-- a file still held by VS (e.g. vc145.pdb by mspdbsrv) only warns: the next Clean picks it up -->
+    <RemoveDir Directories="$(ProjectDir)bin" ContinueOnError="WarnAndContinue" />
+    <RemoveDir Directories="$(ProjectDir)build" ContinueOnError="WarnAndContinue" />
+  </Target>
+</Project>
