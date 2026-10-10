@@ -1,5 +1,7 @@
 #include "util.h"
 
+#include "i18n.h"
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -157,9 +159,9 @@ std::string clockTime()
 std::string formatSize(uint64_t bytes)
 {
     char b[32];
-    if (bytes >= 1024ull * 1024 * 1024) snprintf(b, sizeof(b), "%.1f ГБ", bytes / (1024.0 * 1024 * 1024));
-    else if (bytes >= 1024ull * 1024) snprintf(b, sizeof(b), "%.1f МБ", bytes / (1024.0 * 1024));
-    else if (bytes >= 1024) snprintf(b, sizeof(b), "%.0f КБ", bytes / 1024.0);
-    else snprintf(b, sizeof(b), "%llu Б", (unsigned long long)bytes);
+    if (bytes >= 1024ull * 1024 * 1024) snprintf(b, sizeof(b), tr("%.1f ГБ", "%.1f GB"), bytes / (1024.0 * 1024 * 1024));
+    else if (bytes >= 1024ull * 1024) snprintf(b, sizeof(b), tr("%.1f МБ", "%.1f MB"), bytes / (1024.0 * 1024));
+    else if (bytes >= 1024) snprintf(b, sizeof(b), tr("%.0f КБ", "%.0f KB"), bytes / 1024.0);
+    else snprintf(b, sizeof(b), tr("%llu Б", "%llu B"), (unsigned long long)bytes);
     return b;
 }

@@ -12,5 +12,11 @@ constexpr const char* kModsBranch = "main";
 
 bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, std::atomic<float>* progress);
 
+// The latest DSM release on GitHub: its tag ("1.2.0" or "v1.2.0", returned without the "v") and page.
+struct ReleaseInfo {
+    std::string version, url;
+};
+bool latestRelease(ReleaseInfo& out, std::string& err);
+
 // "1.10" > "1.9": numeric parts compare as numbers, the rest as text. <0, 0, >0 like strcmp.
 int compareVersions(const std::string& a, const std::string& b);

@@ -1,0 +1,13 @@
+{
+  "description": "Adds real reflections: floors, puddles and steps reflect everything around them. Corners, cracks and the places where things touch get soft shadows. Fire, magic and the sun glow softly, like in modern games. Floor and wall textures no longer blur at an angle.",
+  "keys": [
+    {
+      "key": "F10",
+      "action": "effects on/off"
+    },
+    {
+      "key": "F11",
+      "action": "reload settings"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # DSU Engine: developer notes
 
-DSU Engine adds screen-space reflections and HDR bloom to **Dark Souls Remastered**. It ships as the
+DSU Engine adds ambient occlusion, screen-space reflections, HDR bloom and anisotropic filtering to **Dark Souls Remastered**. It ships as the
 "DS Upgrader Engine" mod in DSM and works with or without ReShade.
 
 These notes explain how it works and record facts about the game's rendering that took reverse
@@ -17,7 +17,7 @@ engineering to find. Read them before changing the engine. Update them when you 
    No exe addresses are used, so the engine survives most game patches.
 4. **We collect what the effects need.** The depth buffer, the camera matrix and the exposure are read
    from the game's own shaders and constant buffers.
-5. **We run our effects right before the tonemap.** Reflections and bloom are applied to the HDR scene,
+5. **We run our effects right before the tonemap.** AO, reflections and bloom are applied to the HDR scene,
    and the game's tonemap reads our result instead of the original image.
 
 ## Files
@@ -26,7 +26,7 @@ engineering to find. Read them before changing the engine. Update them when you 
 |---|---|
 | `src/proxy.cpp`, `src/stubs.asm`, `src/d3d11.def`, `src/exports.h` | The fake `d3d11.dll`: loads the real one and forwards all 51 exports to it. |
 | `src/engine.cpp`, `src/engine.h` | Hooks, recognising passes, collecting depth and camera, calling the effects. |
-| `src/effects.cpp` | Our render passes: normals from depth, reflections, bloom, final composite. |
+| `src/effects.cpp` | Our render passes: normals from depth, ambient occlusion, reflections, bloom, final composite. |
 | `src/common.cpp`, `src/common.h` | Paths, the log file, reading `DSUEngine.ini`. |
 | `src/game_shaders.h` | Generated table "shader checksum → name". Don't edit by hand. |
 | `shaders/dsu.hlsl` | Our shaders. Compiled at runtime, so they can be changed without rebuilding. |
@@ -42,12 +42,13 @@ engineering to find. Read them before changing the engine. Update them when you 
 
 ## Debugging in the game
 
-- **Log:** `DSUEngine.log` in the game folder. It records which hooks were installed, which game passes
+- **Log:** `DSUEngine.log` in the game folder, written only with `Log=1` in `[General]` of the ini (off by
+  default; read at game start). It can be read while the game runs. It records which hooks were installed, which game passes
   were recognised, the camera that was found and whether the effects initialised.
 - **F10** turns the effects on and off, for quick before/after comparisons.
 - **F11** re-reads `DSUEngine.ini` and recompiles `dsu.hlsl`. Edit the shader in the game folder,
   press F11, see the result right away.
-- **`DebugView`** in the ini shows intermediate images: `1` depth, `2` normals, `3` reflections only, `4` bloom only.
+- **`DebugView`** in the ini shows intermediate images: `1` depth, `2` normals, `3` reflections only, `4` bloom only, `5` AO only.
 
 ## After a game update
 
@@ -123,7 +124,7 @@ Reading it sooner would stall the GPU.
 
 ## Hooking details
 
-- **What is hooked.** The device (`CreatePixelShader`, `CreateComputeShader`, `CreateDeferredContext`),
+- **What is hooked.** The device (`CreatePixelShader`, `CreateComputeShader`, `CreateSamplerState`, `CreateDeferredContext`),
   device contexts (`PSSetShader`, `DrawIndexed`, `Draw`, `Dispatch`, `CSSetShader`),
   the DXGI factory (`CreateSwapChain`, `CreateSwapChainForHwnd`) and the swap chain (`Present`).
   Hooks replace entries in the object's virtual function table.
@@ -135,13 +136,23 @@ Reading it sooner would stall the GPU.
 - **With ReShade** (`dxgi.dll`), the hooks land on ReShade's wrapper objects, which share one table for
   all contexts. Both cases work.
 
+- **Anisotropic filtering.** `CreateSamplerState` turns linear samplers that wrap or mirror (the game's
+  material textures) into anisotropic ones, `[Textures]` in the ini. Clamped samplers (post-processing),
+  comparison samplers (shadows) and point samplers are left alone. The game creates its samplers at startup,
+  so this setting needs a restart; F11 doesn't apply it.
+
 ## Our effects (`shaders/dsu.hlsl`)
 
 In the order they run:
 
 1. **Normals from depth.** The game has no normal buffer we can use, so normals are rebuilt from depth.
-2. **Reflections (SSR).** A ray is marched in view space through the depth buffer, then refined with a
+2. **Ambient occlusion (GTAO).** Ground-truth AO after Intel's XeGTAO: per pixel, `Slices` directions,
+   `Steps` depth samples on each side, horizon angles integrated against the normal. Static interleaved
+   gradient noise, then a depth-aware 9-tap blur along x and y. It adds to the game's own (weak) SAO, which is
+   already baked into the scene. In the final pass it multiplies the HDR scene, but bright pixels (exposed
+   luminance × `LightProtect`) keep their light, so fire, magic and sunlit surfaces aren't greyed out.
+3. **Reflections (SSR).** A ray is marched in view space through the depth buffer, then refined with a
    binary search. By default only floors, puddles and steps reflect (`WallAmount=0`).
-3. **Bloom.** 7 levels down with a 13-tap filter (Karis average against fireflies), then back up with a tent filter.
-4. **Final.** Reflections are smoothed with a depth-aware 3×3 filter, Fresnel and the floor boost are
+4. **Bloom.** 7 levels down with a 13-tap filter (Karis average against fireflies), then back up with a tent filter.
+5. **Final.** AO is applied, reflections are smoothed with a depth-aware 3×3 filter, Fresnel and the floor boost are
    applied, bloom is added. The result goes to the tonemap instead of the original scene.

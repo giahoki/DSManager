@@ -30,6 +30,15 @@ Click a mod to see its description, the keys it uses in the game, and whether it
 
 Mods can also come as patches instead of full game files. More on that [below](#patches-instead-of-game-files).
 
+The gear at the top right opens the **settings**:
+
+- **Language**: Russian or English. By default DSM follows the Windows display language. Mod descriptions switch too, when the mod has a translation.
+- **Game folders**: where each game is. DSM finds them through Steam; if it can't, choose the folder by hand (and go back to Steam's with "find through Steam").
+- **Updates**: DSM checks [its releases](https://github.com/giahoki/DSManager/releases) on start and tells you when a newer version is out.
+- **Debug mode**: a journal with every step of an install appears in the app ("journal" next to "mods folder", with "copy all" for bug reports), and mods that support it write their own logs. Apply the mods again after switching it.
+
+Settings are kept in `data\settings.json`.
+
 > [!WARNING]
 > Dark Souls III and Elden Ring use EasyAntiCheat. **Play modded only offline.**
 > Elden Ring only reads loose files through ModEngine 2, so support for it is still experimental.
@@ -37,7 +46,7 @@ Mods can also come as patches instead of full game files. More on that [below](#
 ## ✦ Getting started
 
 1. Run the installer `DSM-Setup-<version>.exe`, or just put `DSM.exe` in any folder.
-2. Start it and pick your game. DSM looks for it through Steam. If it can't find it, click the game card at the top and choose the folder with the game's exe (for example, `DarkSoulsRemastered.exe`).
+2. Start it and pick your game. DSM looks for it through Steam. If it can't find it, open the settings (the gear at the top right) and choose the folder with the game's exe (for example, `DarkSoulsRemastered.exe`).
 3. Press **Refresh list** to get mods from GitHub, or put your own into `mods\<game name>\`.
 4. Light the mods you want, press **Apply**, then **Play**.
 
@@ -86,6 +95,44 @@ When you release a new version, bump `version`. That's how DSM (and Refresh list
 
 `keys` and `incompatible` are optional too. List your mod's hotkeys in `keys`, and DSM shows them next to the description. In `incompatible`, name the mods yours doesn't work with, by folder or by name. You don't need to list mods that change the same files: DSM finds those on its own.
 
+### Translations
+
+Write `mod.json` in your own language, and put translations next to it, one file per language: `lang\en.json`, `lang\ru.json`. Each one holds only what it translates; anything missing comes from `mod.json`:
+
+```json
+{
+  "name": "My Mod",
+  "description": "What the mod does.",
+  "keys": [
+    { "key": "F10", "action": "turn effects on or off" }
+  ]
+}
+```
+
+DSM shows the file of the interface language. Translations don't need a new `version`: Refresh list picks up changed files in `lang\` on its own.
+
+### Debug mode
+
+If your mod has a log or a debug switch in an ini it ships, let DSM's debug mode turn it on:
+
+```json
+"debug": [
+  { "file": "DSUEngine.ini", "section": "General", "key": "Log", "on": "1", "off": "0" }
+]
+```
+
+`file` is the game path of one of your mod's files. When the player applies mods with debug mode on, DSM writes that file with `key=on`, otherwise with `key=off`. Your own file in the mod folder stays as it is.
+
+### Files your mod creates while the game runs
+
+Logs and the like aren't part of the mod, so DSM doesn't know about them. List them in `cleanup`, and DSM deletes them from the game folder when the mod is removed. Game paths, `*` and `?` allowed in the file name:
+
+```json
+"cleanup": ["ReShade*.log", "dxgi.log"]
+```
+
+Files your mod installs that the game never had (a ReShade ini, say) are removed even if they changed while playing.
+
 ### Patches instead of game files
 
 If your mod changes a few values inside a game file, sharing the whole file means sharing FromSoftware's content along with it. A patch stores only your changes. When a player applies the mod, DSM takes the file from their own game and applies your changes to it.
@@ -114,6 +161,8 @@ A few things it's careful about:
 - If Steam updates or repairs a file while a mod is on, DSM notices and won't overwrite the new file with the old backup.
 
 Which mods are on and what's installed is stored in `data\<game id>\state.json`.
+
+The backups live in DSM's folder, so remove the mods (**Restore original** in every game) before uninstalling DSM. The uninstaller asks whether you did, and if not, it stops and tells you to do that first.
 
 ## ✦ Building from source
 
@@ -165,7 +214,7 @@ Open a game right away, skipping the selection screen:
 DSM.exe --game ds3
 ```
 
-Save a screenshot of the interface without opening a window:
+Save a screenshot of the interface without opening a window (`--open-settings` and `--open-journal` open those windows first, `--check-update` checks GitHub for a new DSM even here):
 
 ```bash
 DSM.exe --screenshot out.png --shot-time 3

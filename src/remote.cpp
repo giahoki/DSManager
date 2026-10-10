@@ -1,5 +1,6 @@
 #include "remote.h"
 
+#include "i18n.h"
 #include "patch.h"
 #include "version.h"
 
@@ -69,7 +70,7 @@ int httpGet(const wchar_t* host, const std::string& path, const wchar_t* headers
     }
     if (!ok) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "ошибка сети %lu", GetLastError());
+        snprintf(buf, sizeof(buf), tr("ошибка сети %lu", "network error %lu"), GetLastError());
         err = buf;
         status = 0;
     }
@@ -168,14 +169,17 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
     std::string treePath = std::string("/repos/") + kModsRepo + "/git/trees/" + kModsBranch + "?recursive=1";
     int status = httpGet(L"api.github.com", treePath, L"Accept: application/vnd.github+json\r\n", body, err);
     if (status != 200) {
-        log(LogLevel::Warn, status == 0 ? "Нет связи с GitHub (" + err + "), показываю только локальные моды."
-                          : status == 403 || status == 429 ? "GitHub временно ограничил запросы, попробуй через час."
-                          : "GitHub ответил " + std::to_string(status) + ", обновления не проверены.");
+        log(LogLevel::Warn, status == 0 ? tr("Нет связи с GitHub (", "No connection to GitHub (") + err +
+                                              tr("), показываю только локальные моды.", "), showing only local mods.")
+                          : status == 403 || status == 429 ? tr("GitHub временно ограничил запросы, попробуй через час.",
+                                                                "GitHub is limiting requests for now, try again in an hour.")
+                          : tr("GitHub ответил ", "GitHub answered ") + std::to_string(status) +
+                                tr(", обновления не проверены.", ", updates not checked."));
         return false;
     }
     json tree = json::parse(body.begin(), body.end(), nullptr, false);
     if (!tree.is_object() || !tree.contains("tree")) {
-        log(LogLevel::Warn, "Не удалось разобрать ответ GitHub.");
+        log(LogLevel::Warn, tr("Не удалось разобрать ответ GitHub.", "Couldn't read GitHub's answer."));
         return false;
     }
 
@@ -193,7 +197,8 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
     }
 
     // Which mods to take: new here, or a newer version than the local mod.json.
-    struct Plan { std::string mod, version, localVersion; Bytes modJson; bool isNew; std::vector<RemoteFile> fetch; std::vector<RemoteFile> all; };
+    // langOnly: same version here, only its translations (lang/) changed: they don't need a version bump
+    struct Plan { std::string mod, version, localVersion; Bytes modJson; bool isNew; std::vector<RemoteFile> fetch; std::vector<RemoteFile> all; bool langOnly = false; };
     std::vector<Plan> plans;
     uint64_t totalBytes = 0;
     for (auto& [mod, files] : remote) {
@@ -207,25 +212,27 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
         if (mj != files.end()) {
             std::string path = std::string("/") + kModsRepo + "/" + kModsBranch + "/" + urlEncodePath("mods/" + game.name + "/" + mod + "/mod.json");
             if (httpGet(L"raw.githubusercontent.com", path, nullptr, plan.modJson, err) != 200) {
-                log(LogLevel::Warn, "Не удалось прочитать mod.json мода " + mod + " на GitHub.");
+                log(LogLevel::Warn, tr("Не удалось прочитать mod.json мода ", "Couldn't read mod.json of ") + mod + tr(" на GitHub.", " on GitHub."));
                 continue;
             }
             plan.version = versionOf(std::string(plan.modJson.begin(), plan.modJson.end()));
         }
-        if (!isNew && compareVersions(plan.version, localVersion) <= 0) continue;
+        plan.langOnly = !isNew && compareVersions(plan.version, localVersion) <= 0;
 
         for (auto& f : files) {
             if (f.path == "mod.json") continue;  // already here, written last
+            if (plan.langOnly && !f.path.starts_with("lang/")) continue;
             fs::path local = dir / pathFromUtf8(f.path);
             if (fs::exists(local, ec) && fs::file_size(local, ec) == f.size && gitBlobSha(readBytes(local)) == f.sha) continue;
             plan.fetch.push_back(f);
             totalBytes += f.size;
         }
+        if (plan.langOnly && plan.fetch.empty()) continue;
         plans.push_back(std::move(plan));
     }
 
     if (plans.empty()) {
-        log(LogLevel::Good, "Новых модов и версий на GitHub нет.");
+        log(LogLevel::Good, tr("Новых модов и версий на GitHub нет.", "No new mods or versions on GitHub."));
         return true;
     }
 
@@ -240,7 +247,9 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
             std::string path = std::string("/") + kModsRepo + "/" + kModsBranch + "/" + urlEncodePath("mods/" + game.name + "/" + plan.mod + "/" + f.path);
             int st = httpGet(L"raw.githubusercontent.com", path, nullptr, data, err);
             if (st != 200 || gitBlobSha(data) != f.sha) {
-                log(LogLevel::Error, "Не удалось скачать " + plan.mod + "/" + f.path + (st == 200 ? ": файл повреждён" : st ? ": код " + std::to_string(st) : ": " + err));
+                log(LogLevel::Error, tr("Не удалось скачать ", "Couldn't download ") + plan.mod + "/" + f.path +
+                                         (st == 200 ? tr(": файл повреждён", ": the file is damaged")
+                                          : st ? tr(": код ", ": code ") + std::to_string(st) : ": " + err));
                 ok = false;
                 break;
             }
@@ -250,10 +259,11 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
             fs::create_directories(dst.parent_path(), ec);
             if (!writeBytes(part, data) || (fs::rename(part, dst, ec), ec)) {
                 fs::remove(part, ec);
-                log(LogLevel::Error, "Не удалось записать " + plan.mod + "/" + f.path);
+                log(LogLevel::Error, tr("Не удалось записать ", "Couldn't write ") + plan.mod + "/" + f.path);
                 ok = false;
                 break;
             }
+            log(LogLevel::Debug, tr("скачан: ", "downloaded: ") + plan.mod + "/" + f.path + " (" + formatSize(f.size) + ")");
             doneBytes += f.size;
             if (progress) *progress = float(doneBytes) / float(std::max<uint64_t>(totalBytes, 1));
         }
@@ -261,9 +271,16 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
             allOk = false;
             continue;  // mod.json keeps the old version: the next check takes the rest
         }
+        if (plan.langOnly) {
+            std::string name = plan.mod;
+            json j = json::parse(readTextFile(dir / "mod.json"), nullptr, false);
+            if (j.is_object()) name = j.value("name", name);
+            log(LogLevel::Good, tr("Обновлены переводы: ", "Translations updated: ") + name);
+            continue;
+        }
 
-        // files the new version no longer ships (only in files/ and patches/: notes of the user stay)
-        for (const char* sub : {"files", "patches"}) {
+        // files the new version no longer ships (only in files/, patches/ and lang/: notes of the user stay)
+        for (const char* sub : {"files", "patches", "lang"}) {
             std::vector<fs::path> stale;
             for (auto& e : fs::recursive_directory_iterator(dir / sub, ec)) {
                 if (!e.is_regular_file()) continue;
@@ -280,9 +297,33 @@ bool syncMods(const GameDef& game, const fs::path& modsDir, const LogFn& log, st
         json j = json::parse(plan.modJson.begin(), plan.modJson.end(), nullptr, false);
         if (j.is_object()) name = j.value("name", name);
         std::string v = plan.version.empty() ? "" : " v" + plan.version;
-        log(LogLevel::Good, plan.isNew ? "Скачан новый мод" + v + ": " + name
-                                       : "Загружена" + v + (plan.localVersion.empty() ? "" : " (было v" + plan.localVersion + ")") + ": " + name);
+        log(LogLevel::Good, plan.isNew ? tr("Скачан новый мод", "New mod downloaded") + v + ": " + name
+                                       : tr("Загружена", "Downloaded") + v +
+                                             (plan.localVersion.empty() ? "" : tr(" (было v", " (was v") + plan.localVersion + ")") + ": " + name);
     }
     if (progress) *progress = 1.f;
     return allOk;
+}
+
+bool latestRelease(ReleaseInfo& out, std::string& err)
+{
+    Bytes body;
+    std::string path = std::string("/repos/") + kModsRepo + "/releases/latest";
+    int status = httpGet(L"api.github.com", path, L"Accept: application/vnd.github+json\r\n", body, err);
+    if (status != 200) {
+        if (status == 404) err = tr("релизов нет", "no releases");
+        else if (status == 403 || status == 429) err = tr("GitHub ограничил запросы", "GitHub is limiting requests");
+        else if (status) err = tr("GitHub ответил ", "GitHub answered ") + std::to_string(status);
+        return false;
+    }
+    json j = json::parse(body.begin(), body.end(), nullptr, false);
+    std::string tag = j.is_object() ? j.value("tag_name", "") : "";
+    if (tag.empty()) {
+        err = tr("не удалось разобрать ответ GitHub", "couldn't read GitHub's answer");
+        return false;
+    }
+    if (tag[0] == 'v' || tag[0] == 'V') tag.erase(0, 1);
+    out.version = tag;
+    out.url = j.value("html_url", std::string("https://github.com/") + kModsRepo + "/releases/latest");
+    return true;
 }

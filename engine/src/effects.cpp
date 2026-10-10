@@ -1,4 +1,4 @@
-// The engine's own passes: G-buffer from depth, screen-space reflections, HDR bloom, final composite.
+// The engine's own passes: G-buffer from depth, ambient occlusion, screen-space reflections, HDR bloom, final composite.
 // Shaders are compiled at runtime from DSUEngine\shaders\dsu.hlsl, so they can be tuned live (F11).
 #include "engine.h"
 
@@ -18,14 +18,15 @@ static std::mutex g_fxMutex;  // effectsRun vs. reload
 
 struct Shaders {
     ID3D11VertexShader* vs = nullptr;
-    ID3D11PixelShader *prep = nullptr, *ssr = nullptr, *bloomPre = nullptr, *bloomDown = nullptr, *bloomUp = nullptr, *final = nullptr;
+    ID3D11PixelShader *prep = nullptr, *ao = nullptr, *aoBlur = nullptr, *ssr = nullptr, *bloomPre = nullptr, *bloomDown = nullptr,
+                      *bloomUp = nullptr, *final = nullptr;
     void release()
     {
-        for (IUnknown* p : std::initializer_list<IUnknown*>{vs, prep, ssr, bloomPre, bloomDown, bloomUp, final})
+        for (IUnknown* p : std::initializer_list<IUnknown*>{vs, prep, ao, aoBlur, ssr, bloomPre, bloomDown, bloomUp, final})
             if (p) p->Release();
         *this = {};
     }
-    bool ok() const { return vs && prep && ssr && bloomPre && bloomDown && bloomUp && final; }
+    bool ok() const { return vs && prep && ao && aoBlur && ssr && bloomPre && bloomDown && bloomUp && final; }
 };
 static Shaders g_sh;
 
@@ -63,7 +64,7 @@ struct Target {
 };
 
 static constexpr int kBloomLevels = 7;
-static Target g_prep, g_ssr, g_final;
+static Target g_prep, g_ao, g_aoTmp, g_ssr, g_final;
 static Target g_down[kBloomLevels], g_up[kBloomLevels];
 static UINT g_w = 0, g_h = 0;
 
@@ -82,7 +83,11 @@ struct CB {
     float bloom[4];
     float src[4];
     float worldUp[4];  // world up in view space, w = view distance treated as sky
+    float ao[4];       // intensity (power), radius (m), slices, steps per side
+    float ao2[4];      // light protect * exposure, max radius (px), blur direction (0 x, 1 y), 0
 };
+
+static constexpr UINT kSlots = 5;  // texture slots our passes use (t0..t4)
 
 // ---------------------------------------------------------------- shaders
 
@@ -112,6 +117,8 @@ static bool loadShaders()
         }
     };
     ps("PrepPS", &s.prep);
+    ps("AoPS", &s.ao);
+    ps("AoBlurPS", &s.aoBlur);
     ps("SsrPS", &s.ssr);
     ps("BloomPrefilterPS", &s.bloomPre);
     ps("BloomDownPS", &s.bloomDown);
@@ -193,7 +200,7 @@ struct StateBackup {
     UINT sampleMask = 0;
     ID3D11DepthStencilState* dss = nullptr;
     UINT stencilRef = 0;
-    ID3D11ShaderResourceView* srv[4] = {};
+    ID3D11ShaderResourceView* srv[kSlots] = {};
     ID3D11SamplerState* smp[2] = {};
     ID3D11Buffer* cb = nullptr;
 
@@ -211,7 +218,7 @@ struct StateBackup {
         c->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtv, &dsv);
         c->OMGetBlendState(&blend, blendFactor, &sampleMask);
         c->OMGetDepthStencilState(&dss, &stencilRef);
-        c->PSGetShaderResources(0, 4, srv);
+        c->PSGetShaderResources(0, kSlots, srv);
         c->PSGetSamplers(0, 2, smp);
         c->PSGetConstantBuffers(0, 1, &cb);
     }
@@ -229,7 +236,7 @@ struct StateBackup {
         c->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtv, dsv);
         c->OMSetBlendState(blend, blendFactor, sampleMask);
         c->OMSetDepthStencilState(dss, stencilRef);
-        c->PSSetShaderResources(0, 4, srv);
+        c->PSSetShaderResources(0, kSlots, srv);
         c->PSSetSamplers(0, 2, smp);
         c->PSSetConstantBuffers(0, 1, &cb);
         for (IUnknown* p : std::initializer_list<IUnknown*>{vs, ps, gs, hs, ds, il, rs, dsv, blend, dss, cb})
@@ -245,7 +252,8 @@ struct StateBackup {
 static bool ensureTargets(UINT w, UINT h)
 {
     if (w == g_w && h == g_h && g_final.srv) return true;
-    bool ok = g_prep.create(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT) && g_ssr.create(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT)
+    bool ok = g_prep.create(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT) && g_ao.create(w, h, DXGI_FORMAT_R8_UNORM)
+              && g_aoTmp.create(w, h, DXGI_FORMAT_R8_UNORM) && g_ssr.create(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT)
               && g_final.create(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
     UINT bw = w, bh = h;
     for (int i = 0; i < kBloomLevels && ok; ++i) {
@@ -270,15 +278,16 @@ static void setCB(ID3D11DeviceContext* c, const CB& data)
 
 static void pass(ID3D11DeviceContext* c, ID3D11PixelShader* ps, Target& out, std::initializer_list<ID3D11ShaderResourceView*> in)
 {
-    ID3D11ShaderResourceView* none[4] = {};
-    c->PSSetShaderResources(0, 4, none);  // nothing may be bound as input and output at once
+    ID3D11ShaderResourceView* none[kSlots] = {};
+    c->PSSetShaderResources(0, kSlots, none);  // nothing may be bound as input and output at once
     c->OMSetRenderTargets(1, &out.rtv, nullptr);
     D3D11_VIEWPORT vp = {0, 0, float(out.w), float(out.h), 0, 1};
     c->RSSetViewports(1, &vp);
-    ID3D11ShaderResourceView* srv[4] = {};
-    int i = 0;
-    for (auto* s : in) srv[i++] = s;
-    c->PSSetShaderResources(0, 4, srv);
+    ID3D11ShaderResourceView* srv[kSlots] = {};
+    UINT i = 0;
+    for (auto* s : in)
+        if (i < kSlots) srv[i++] = s;
+    c->PSSetShaderResources(0, kSlots, srv);
     c->PSSetShader(ps, nullptr, 0);
     c->Draw(3, 0);
 }
@@ -332,6 +341,13 @@ ID3D11ShaderResourceView* effectsRun(ID3D11DeviceContext* c, ID3D11ShaderResourc
     cb.worldUp[1] = in.cam.fromMatrix ? in.cam.worldUp[1] : 1.0f;
     cb.worldUp[2] = in.cam.fromMatrix ? in.cam.worldUp[2] : 0.0f;
     cb.worldUp[3] = in.cam.farZ > 0 ? in.cam.farZ * 0.95f : g_cfg.fallbackFar * 0.95f;
+    bool doAo = g_cfg.ao && haveDepth;
+    cb.ao[0] = std::max(g_cfg.aoIntensity, 0.0f);
+    cb.ao[1] = std::max(g_cfg.aoRadius, 0.05f);
+    cb.ao[2] = float(std::clamp(g_cfg.aoSlices, 1, 8));
+    cb.ao[3] = float(std::clamp(g_cfg.aoSteps, 1, 16));
+    cb.ao2[0] = std::max(g_cfg.aoLightProtect, 0.0f) * in.cam.exposure;
+    cb.ao2[1] = float(sd.Height) * 0.12f;
 
     StateBackup st;
     st.save(c);
@@ -357,16 +373,26 @@ ID3D11ShaderResourceView* effectsRun(ID3D11DeviceContext* c, ID3D11ShaderResourc
         setCB(c, cb);
     };
 
-    // 1-2: G-buffer and reflections (only with the game's depth)
+    // 1-2: G-buffer, ambient occlusion and reflections (only with the game's depth)
     src(g_prep);
+    float zero[4] = {}, one[4] = {1, 1, 1, 1};
     if (haveDepth) {
         pass(c, g_sh.prep, g_prep, {in.depth});
+        if (doAo) {
+            pass(c, g_sh.ao, g_ao, {g_prep.srv});
+            cb.ao2[2] = 0;
+            setCB(c, cb);
+            pass(c, g_sh.aoBlur, g_aoTmp, {g_ao.srv, g_prep.srv});
+            cb.ao2[2] = 1;
+            setCB(c, cb);
+            pass(c, g_sh.aoBlur, g_ao, {g_aoTmp.srv, g_prep.srv});
+        }
         pass(c, g_sh.ssr, g_ssr, {scene, g_prep.srv});
     } else {
-        float zero[4] = {};
         c->ClearRenderTargetView(g_prep.rtv, zero);
         c->ClearRenderTargetView(g_ssr.rtv, zero);
     }
+    if (!doAo) c->ClearRenderTargetView(g_ao.rtv, one);
 
     // 3: bloom, down then up
     src(g_final);  // texel of the full-res scene for the first 13-tap
@@ -385,10 +411,10 @@ ID3D11ShaderResourceView* effectsRun(ID3D11DeviceContext* c, ID3D11ShaderResourc
 
     // 4: final into our own HDR target; the game's tonemap reads it instead of the scene
     src(g_final);
-    pass(c, g_sh.final, g_final, {scene, g_prep.srv, g_ssr.srv, g_up[0].srv});
+    pass(c, g_sh.final, g_final, {scene, g_prep.srv, g_ssr.srv, g_up[0].srv, g_ao.srv});
 
-    ID3D11ShaderResourceView* none[4] = {};
-    c->PSSetShaderResources(0, 4, none);
+    ID3D11ShaderResourceView* none[kSlots] = {};
+    c->PSSetShaderResources(0, kSlots, none);
     st.restore(c);
     return g_final.srv;
 }

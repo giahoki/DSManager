@@ -77,35 +77,18 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,DSM}"; Flags: nowai
 Type: filesandordirs; Name: "{app}"
 
 [CustomMessages]
-russian.AskRestore=Убрать моды из игр перед удалением DSM?%n%nДа — вернуть оригинальные файлы игр, затем удалить DSM.%nНет — оставить моды в играх. Бэкапы оригиналов удалятся вместе с DSM, вернуть игру потом поможет только проверка целостности файлов в Steam.%nОтмена — ничего не удалять.
-english.AskRestore=Remove the mods from the games before uninstalling DSM?%n%nYes - restore the original game files, then uninstall DSM.%nNo - keep the mods in the games. The backups of the original files are removed with DSM; only Steam's file verification can repair the games later.%nCancel - don't uninstall.
-russian.RestoreFailed=Не удалось вернуть оригинальные файлы игр:%1%n%nСкорее всего, игра сейчас запущена. Закрой её и запусти удаление снова.%n%nУдалить DSM всё равно? Бэкапы оригинальных файлов будут потеряны, вернуть игру поможет только проверка целостности файлов в Steam.
-english.RestoreFailed=Could not restore the original game files:%1%n%nThe game is probably running. Close it and run the uninstaller again.%n%nUninstall DSM anyway? The backups of the original files will be lost; only Steam's file verification can repair the game then.
+russian.AskRemoved=Перед удалением DSM моды нужно убрать из игр.%n%nТы уже удалил моды через DSM (кнопка «вернуть оригинал» в каждой игре с модами)?
+english.AskRemoved=Before uninstalling DSM, the mods have to be removed from the games.%n%nHave you already removed them in DSM (the «restore original» button in every game with mods)?
+russian.OpenDSM=Сначала открой DSM и в каждой игре с модами нажми «вернуть оригинал», затем запусти удаление снова.%n%nЕсли удалить DSM раньше, вместе с ним пропадут бэкапы оригинальных файлов игр, и вернуть игру поможет только проверка целостности файлов в Steam.
+english.OpenDSM=First open DSM and press «restore original» in every game with mods, then run the uninstaller again.%n%nIf DSM is removed before that, the backups of the original game files go with it, and only Steam's file verification can repair the games.
 
 [Code]
 // data\ holds the backups of the original game files and is deleted with the program folder,
-// so the user decides first whether the games are put back to their original state.
-function RestoreGame(const Id: String): Boolean;
-var
-  Code: Integer;
-begin
-  Result := Exec(ExpandConstant('{app}\{#AppExe}'), '--cli restore --game ' + Id, ExpandConstant('{app}'),
-                 SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
-end;
-
+// so DSM is only removed once the player has put the games back in DSM itself: removing mods there
+// also clears what they left in the game (logs and the like).
 function InitializeUninstall(): Boolean;
-var
-  Failed: String;
 begin
-  case MsgBox(CustomMessage('AskRestore'), mbConfirmation, MB_YESNOCANCEL) of
-    IDCANCEL: begin Result := False; Exit; end;
-    IDNO: begin Result := True; Exit; end;
-  end;
-
-  Failed := '';
-  if not RestoreGame('dsr') then Failed := Failed + #13#10 + '  Dark Souls Remastered';
-  if not RestoreGame('ds3') then Failed := Failed + #13#10 + '  Dark Souls III';
-  if not RestoreGame('er') then Failed := Failed + #13#10 + '  Elden Ring';
-  Result := (Failed = '') or
-            (MsgBox(FmtMessage(CustomMessage('RestoreFailed'), [Failed]), mbError, MB_YESNO or MB_DEFBUTTON2) = IDYES);
+  Result := MsgBox(CustomMessage('AskRemoved'), mbConfirmation, MB_YESNO) = IDYES;
+  if not Result then
+    MsgBox(CustomMessage('OpenDSM'), mbInformation, MB_OK);
 end;

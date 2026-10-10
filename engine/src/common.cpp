@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <share.h>
 
 namespace dsu {
 
@@ -19,13 +20,16 @@ fs::path gameDir()
 
 fs::path engineDir() { return gameDir() / L"DSUEngine"; }
 
+static std::wstring iniPath() { return (gameDir() / L"DSUEngine.ini").wstring(); }
+
 void log(const char* fmt, ...)
 {
     static std::mutex m;
-    static FILE* f = [] {
-        FILE* fp = nullptr;
-        _wfopen_s(&fp, (gameDir() / L"DSUEngine.log").c_str(), L"w");
-        return fp;
+    // off unless [General] Log=1: read once at startup, the file isn't even created otherwise
+    static FILE* f = []() -> FILE* {
+        if (!GetPrivateProfileIntW(L"General", L"Log", 0, iniPath().c_str())) return nullptr;
+        // shared for reading, so the log can be read while the game runs
+        return _wfsopen((gameDir() / L"DSUEngine.log").c_str(), L"w", _SH_DENYWR);
     }();
     if (!f) return;
 
@@ -43,8 +47,6 @@ void log(const char* fmt, ...)
 }
 
 // ---------------------------------------------------------------- ini
-
-static std::wstring iniPath() { return (gameDir() / L"DSUEngine.ini").wstring(); }
 
 static float readF(const wchar_t* sec, const wchar_t* key, float def)
 {
@@ -68,6 +70,16 @@ void Settings::load()
     keyReload = readI(L"General", L"KeyReload", d.keyReload);
     debugView = readI(L"General", L"DebugView", d.debugView);
 
+    anisotropy = readI(L"Textures", L"Anisotropy", d.anisotropy);
+    lodBias = readF(L"Textures", L"LodBias", d.lodBias);
+
+    ao = readI(L"AmbientOcclusion", L"Enabled", d.ao) != 0;
+    aoIntensity = readF(L"AmbientOcclusion", L"Intensity", d.aoIntensity);
+    aoRadius = readF(L"AmbientOcclusion", L"Radius", d.aoRadius);
+    aoSlices = readI(L"AmbientOcclusion", L"Slices", d.aoSlices);
+    aoSteps = readI(L"AmbientOcclusion", L"Steps", d.aoSteps);
+    aoLightProtect = readF(L"AmbientOcclusion", L"LightProtect", d.aoLightProtect);
+
     ssr = readI(L"Reflections", L"Enabled", d.ssr) != 0;
     ssrIntensity = readF(L"Reflections", L"Intensity", d.ssrIntensity);
     ssrMaxDistance = readF(L"Reflections", L"MaxDistance", d.ssrMaxDistance);
@@ -86,8 +98,8 @@ void Settings::load()
     fallbackNear = readF(L"Camera", L"FallbackNear", d.fallbackNear);
     fallbackFar = readF(L"Camera", L"FallbackFar", d.fallbackFar);
 
-    log("settings: enabled=%d ssr=%d (%.2f, %d steps) bloom=%d (%.3f, thr %.2f) debug=%d",
-        enabled, ssr, ssrIntensity, ssrSteps, bloom, bloomIntensity, bloomThreshold, debugView);
+    log("settings: enabled=%d aniso=%d ao=%d (%.2f, %.1fm) ssr=%d (%.2f, %d steps) bloom=%d (%.3f, thr %.2f) debug=%d",
+        enabled, anisotropy, ao, aoIntensity, aoRadius, ssr, ssrIntensity, ssrSteps, bloom, bloomIntensity, bloomThreshold, debugView);
 }
 
 }  // namespace dsu

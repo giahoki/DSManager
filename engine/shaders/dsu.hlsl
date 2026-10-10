@@ -1,4 +1,4 @@
-// DSU Engine: screen-space reflections and HDR bloom for DARK SOULS REMASTERED.
+// DSU Engine: ambient occlusion, screen-space reflections and HDR bloom for DARK SOULS REMASTERED.
 // Runs inside the game's frame, on the HDR scene, right before the game's own tonemap.
 // Edited live: save this file and press F11 in game.
 
@@ -12,6 +12,8 @@ cbuffer DSU : register(b0)
     float4 gBloom;        // intensity, threshold, knee, radius
     float4 gSrc;          // texel size + size of the source of a bloom pass
     float4 gWorldUp;      // world up in view space (xyz), view distance treated as sky (w)
+    float4 gAo;           // intensity (power), radius (m), slices, steps per side
+    float4 gAo2;          // light protect * exposure, max radius (px), blur direction (0 x, 1 y), unused
 };
 
 SamplerState sPoint : register(s0);
@@ -21,6 +23,7 @@ Texture2D tA : register(t0);
 Texture2D tB : register(t1);
 Texture2D tC : register(t2);
 Texture2D tD : register(t3);
+Texture2D tE : register(t4);
 
 struct V2P { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -62,6 +65,105 @@ float4 PrepPS(V2P i) : SV_Target
     float3 n = normalize(cross(dy, dx));
     if (dot(n, p) > 0) n = -n;  // face the camera
     return float4(n, zc);
+}
+
+// ---------------------------------------------------------------- 1b. ambient occlusion (GTAO)
+// Ground-truth AO (Jimenez et al. 2016, after Intel's XeGTAO): per slice, find the highest horizon on both
+// sides in the depth buffer and integrate the visible arc against the cosine of the normal.
+// tA = prep. Out: visibility (1 = open, 0 = fully occluded).
+
+static const float PI = 3.14159265;
+
+float FastAcos(float x)
+{
+    float a = abs(x);
+    float r = (-0.156583 * a + PI * 0.5) * sqrt(1 - a);
+    return x >= 0 ? r : PI - r;
+}
+
+float4 AoPS(V2P i) : SV_Target
+{
+    float4 g = tA.SampleLevel(sPoint, i.uv, 0);
+    float z = g.w;
+    if (z <= 0 || z > gWorldUp.w || g.x != g.x) return 1;
+
+    float3 p = ViewPos(i.uv, z);
+    float3 n = g.xyz;
+    float3 v = normalize(-p);
+
+    float radius = gAo.y;
+    float radiusPx = radius / (z * abs(gProjUV.y)) * gScreen.y;  // world radius projected to pixels
+    float fade = saturate(radiusPx / 3 - 0.5);                      // far away the radius is under a pixel or two
+    if (fade <= 0) return 1;
+    radiusPx = min(radiusPx, gAo2.y);
+
+    // falloff: full weight up to ~40% of the radius, none at the radius
+    float falloffRange = 0.615 * radius;
+    float falloffMul = -1 / falloffRange;
+    float falloffAdd = (radius - falloffRange) / falloffRange + 1;
+
+    int slices = (int)gAo.z, steps = (int)gAo.w;
+    float noiseSlice = IGN(i.pos.xy);
+    float noiseStep = IGN(i.pos.xy + float2(17.0, 31.0));
+    float minS = 1.3 / radiusPx;  // never sample the pixel itself
+
+    float vis = 0;
+    [loop] for (int sl = 0; sl < slices; ++sl) {
+        float phi = (sl + noiseSlice) * PI / slices;
+        float2 omega = float2(cos(phi), -sin(phi)) * radiusPx * gScreen.zw;  // screen y goes down
+        float3 dir = float3(cos(phi), sin(phi), 0);
+        float3 ortho = dir - dot(dir, v) * v;
+        float3 axis = normalize(cross(ortho, v));
+        float3 pn = n - axis * dot(n, axis);
+        float pnLen = length(pn);
+        float sgn = sign(dot(ortho, pn));
+        float cosN = saturate(dot(pn, v) / max(pnLen, 1e-4));
+        float nAng = sgn * FastAcos(cosN);
+        float low0 = cos(nAng + PI * 0.5), low1 = cos(nAng - PI * 0.5);
+        float h0c = low0, h1c = low1;
+
+        [loop] for (int st = 0; st < steps; ++st) {
+            float s = (st + noiseStep) / steps;
+            s = s * s + minS;
+            float2 off = omega * s;
+            float2 uv0 = i.uv + off, uv1 = i.uv - off;
+            float3 d0 = ViewPos(uv0, tA.SampleLevel(sPoint, uv0, 0).w) - p;
+            float3 d1 = ViewPos(uv1, tA.SampleLevel(sPoint, uv1, 0).w) - p;
+            float l0 = length(d0), l1 = length(d1);
+            float c0 = dot(d0 / l0, v), c1 = dot(d1 / l1, v);
+            float w0 = saturate(l0 * falloffMul + falloffAdd) * all(uv0 == saturate(uv0));
+            float w1 = saturate(l1 * falloffMul + falloffAdd) * all(uv1 == saturate(uv1));
+            h0c = max(h0c, lerp(low0, c0, w0));
+            h1c = max(h1c, lerp(low1, c1, w1));
+        }
+
+        float h0 = -FastAcos(h1c), h1 = FastAcos(h0c);
+        h0 = nAng + max(h0 - nAng, -PI * 0.5);
+        h1 = nAng + min(h1 - nAng, PI * 0.5);
+        float sinN = sin(nAng);
+        float arc0 = (cosN + 2 * h0 * sinN - cos(2 * h0 - nAng)) / 4;
+        float arc1 = (cosN + 2 * h1 * sinN - cos(2 * h1 - nAng)) / 4;
+        vis += pnLen * (arc0 + arc1);
+    }
+    vis = saturate(vis / slices);
+    vis = pow(vis, gAo.x);
+    return lerp(1, vis, fade);
+}
+
+// Depth-aware 9-tap blur, run once along x and once along y. tA = AO, tB = prep.
+float4 AoBlurPS(V2P i) : SV_Target
+{
+    float2 dir = (gAo2.z < 0.5 ? float2(1, 0) : float2(0, 1)) * gScreen.zw;
+    float zc = tB.SampleLevel(sPoint, i.uv, 0).w;
+    float sum = 0, wsum = 0;
+    [unroll] for (int k = -4; k <= 4; ++k) {
+        float2 uv = i.uv + dir * k;
+        float zs = tB.SampleLevel(sPoint, uv, 0).w;
+        float w = exp(-k * k / 12.0) * exp(-abs(zs - zc) / max(zc * 0.03, 1e-3));
+        sum += tA.SampleLevel(sPoint, uv, 0).r * w;
+        wsum += w;
+    }
+    return sum / max(wsum, 1e-4);
 }
 
 // ---------------------------------------------------------------- 2. reflections
@@ -188,7 +290,7 @@ float4 BloomUpPS(V2P i) : SV_Target
 }
 
 // ---------------------------------------------------------------- 4. final
-// tA = scene HDR, tB = prep, tC = reflections, tD = bloom (up chain level 0).
+// tA = scene HDR, tB = prep, tC = reflections, tD = bloom (up chain level 0), tE = ambient occlusion.
 
 float4 FinalPS(V2P i) : SV_Target
 {
@@ -218,12 +320,17 @@ float4 FinalPS(V2P i) : SV_Target
 
     float3 bloom = tD.SampleLevel(sLinear, i.uv, 0).rgb;
 
+    // AO darkens what ambient light lights; bright pixels are lit directly (or glow) and keep their light
+    float ao = tE.SampleLevel(sPoint, i.uv, 0).r;
+    ao = lerp(ao, 1, saturate(Luma(scene.rgb) * gAo2.x));
+
     if (dbg == 1) return float4(frac(g.www / 10) * (g.w < gWorldUp.w), 1);
     if (dbg == 2) return float4(n * 0.5 + 0.5, 1);
     if (dbg == 3) return float4(refl.rgb * k / max(refl.a, 1e-3), 1);
     if (dbg == 4) return float4(bloom * gBloom.x, 1);
+    if (dbg == 5) return float4(ao.xxx, 1);
 
-    float3 c = scene.rgb;
+    float3 c = scene.rgb * ao;
     c = lerp(c, max(c, refl.rgb / max(refl.a, 1e-3)), k * refl.a);  // reflection replaces the dull env spec where found
     c += bloom * gBloom.x;
     return float4(c, scene.a);

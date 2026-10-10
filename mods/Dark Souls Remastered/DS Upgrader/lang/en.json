@@ -1,0 +1,13 @@
+{
+  "description": "A grim, cinematic picture: every area gets its own fog and colour, sunbeams break through windows and treetops. Stone, metal and water reflect light more brightly, fire and magic glow stronger, shadows reach further. Smoother edges, no banding in the sky and fog. Best together with DS Upgrader Engine.",
+  "keys": [
+    {
+      "key": "Home",
+      "action": "effects menu"
+    },
+    {
+      "key": "End",
+      "action": "effects on/off"
+    }
+  ]
+}

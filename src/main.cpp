@@ -4,6 +4,7 @@
 #include "patch.h"
 #include "remote.h"
 #include "render.h"
+#include "settings.h"
 #include "version.h"
 
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -30,12 +31,12 @@ Col parch, parchDim, ash, gold, goldDim, ember, emberHot, blood;
 }  // namespace theme
 using namespace theme;
 
-static const char* kQuotes[] = {
-    "Пламя угасает, но пепел ещё помнит тепло.",
-    "Каждый мод — уголёк, брошенный во тьму.",
-    "Здесь некуда спешить. Только костёр и тишина.",
-    "Даже угасший мир можно переписать заново.",
-    "Отдохни у огня. Дорога ещё долгая.",
+static const Text kQuotes[] = {
+    {"Пламя угасает, но пепел ещё помнит тепло.", "The flame fades, but the ash still remembers its warmth."},
+    {"Каждый мод — уголёк, брошенный во тьму.", "Every mod is an ember cast into the dark."},
+    {"Здесь некуда спешить. Только костёр и тишина.", "No need to hurry here. Only the bonfire and the quiet."},
+    {"Даже угасший мир можно переписать заново.", "Even a faded world can be written anew."},
+    {"Отдохни у огня. Дорога ещё долгая.", "Rest by the fire. The road is still long."},
 };
 
 struct LogLine {
@@ -99,6 +100,56 @@ struct App {
     bool back = false;
     Theme live = selectionTheme();  // what is on screen now, eased towards the target theme
     Rect titleHit;                    // game title + medallion: click to go back
+
+    // settings window, install journal (debug mode), DSM's own update check
+    AppSettings settings;
+    bool settingsOpen = false, journalOpen = false, escape = false;
+    float journalScroll = 0;
+    bool journalFollow = true;  // stays at the newest line until scrolled up
+    enum class Upd { Idle, Checking, Latest, Available, Failed };
+    std::atomic<Upd> upd{Upd::Idle};
+    std::mutex updMx;
+    ReleaseInfo release;  // guarded by updMx
+    std::string updErr;   // guarded by updMx
+    std::thread updThread;
+
+    void checkUpdate()
+    {
+        if (upd == Upd::Checking) return;
+        if (updThread.joinable()) updThread.join();
+        upd = Upd::Checking;
+        updThread = std::thread([this] {
+            ReleaseInfo r;
+            std::string err;
+            bool ok = latestRelease(r, err);
+            std::lock_guard lock(updMx);
+            release = r;
+            updErr = err;
+            upd = !ok ? Upd::Failed : compareVersions(r.version, DSM_VERSION) > 0 ? Upd::Available : Upd::Latest;
+        });
+    }
+
+    void setLanguage(LangPref p)
+    {
+        settings.language = p;
+        settings.save(root);
+        Lang l = settings.effectiveLang();
+        if (l == lang()) return;
+        setLang(l);
+        if (!busy)
+            for (auto& m : managers) m->scan();  // mods' names and descriptions come from lang/<code>.json
+        else
+            rescanAll = true;
+    }
+
+    void setDebug(bool on)
+    {
+        settings.debug = on;
+        settings.save(root);
+        for (auto& m : managers) m->setDebug(on);
+        if (!on) journalOpen = false;
+    }
+    std::atomic<bool> rescanAll{false};
 
     // selection <-> game, like resting at a bonfire: the screen goes dark around the sigil,
     // the fire sinks to an ember, then flares up again and the other screen appears in its light
@@ -165,7 +216,7 @@ struct App {
     {
         std::lock_guard lock(logMx);
         log.push_back({clockTime(), text, lvl, t});
-        while (log.size() > 60) log.pop_front();
+        while (log.size() > 1000) log.pop_front();
     }
 
     void runTask(bool restore)
@@ -174,7 +225,9 @@ struct App {
         if (worker.joinable()) worker.join();
         busy = true;
         progress = 0;
-        addLog(LogLevel::Info, restore ? "Возвращаю оригинальные файлы…" : "Применяю моды…");
+        if (settings.debug) openJournal();
+        addLog(LogLevel::Info, restore ? tr("Возвращаю оригинальные файлы…", "Restoring the original files…")
+                                       : tr("Применяю моды…", "Applying mods…"));
         worker = std::thread([this, restore] {
             auto L = [this](LogLevel l, const std::string& m) { addLog(l, m); };
             if (restore) mm().restoreAll(L, &progress);
@@ -191,13 +244,20 @@ struct App {
         mm().scan();
         busy = true;
         progress = 0;
-        addLog(LogLevel::Info, "Проверяю моды на GitHub…");
+        if (settings.debug) openJournal();
+        addLog(LogLevel::Info, tr("Проверяю моды на GitHub…", "Checking GitHub for mods…"));
         worker = std::thread([this, game = cur, m = &mm()] {
             auto L = [this](LogLevel l, const std::string& msg) { addLog(l, msg); };
             syncMods(*m->game, m->modsDir, L, &progress);
             rescan = game;
             busy = false;
         });
+    }
+
+    void openJournal()
+    {
+        journalOpen = true;
+        journalFollow = true;
     }
 
     // ------------------------------------------------------------ decorations
@@ -325,10 +385,10 @@ struct App {
         R.text(R.title, x, y, gname, lerp(parch, emberHot, th * 0.35f), S(5));
 
         float lx = x + tw + S(22);
-        float cardX = W - S(44) - S(96) - S(380);
-        if (lx + S(20) + R.measure(R.heading, "менеджер модов", S(4)) < cardX - S(24)) {
+        const char* subtitle = tr("менеджер модов", "mod manager");
+        if (lx + S(20) + R.measure(R.heading, subtitle, S(4)) < W - S(170)) {
             R.gradV({lx, y + S(10), S(1), S(36)}, gold.withA(0), gold.withA(0.6f));
-            R.text(R.heading, lx + S(20), y + S(22), "менеджер модов", gold, S(4));
+            R.text(R.heading, lx + S(20), y + S(22), subtitle, gold, S(4));
         }
 
         // slowly cycling line under the title
@@ -338,41 +398,28 @@ struct App {
         float ph = std::fmod(t, period);
         float qa = std::min(1.f, std::min(ph / 1.2f, (period - ph) / 1.2f));
         // on hover the quote gives way to where the click leads
-        R.text(R.italic, x + S(2), y + S(60), kQuotes[qi], parchDim.withA(0.85f * qa * (1.f - th)));
+        R.text(R.italic, x + S(2), y + S(60), kQuotes[qi].get(), parchDim.withA(0.85f * qa * (1.f - th)));
         if (th > 0.01f) {
-            R.text(R.italic, x + S(2) + S(10) * (1.f - th), y + S(60), "‹ вернуться к выбору мира", gold.withA(th));
+            R.text(R.italic, x + S(2) + S(10) * (1.f - th), y + S(60), tr("‹ вернуться к выбору мира", "‹ back to the world selection"),
+                   gold.withA(th));
             R.gradH({x + S(2), y + S(84), S(200) * th, S(1)}, gold.withA(0.6f * th), gold.withA(0));
         }
 
-        // game card
-        Rect card{W - S(44) - S(96) - S(380), S(26), S(380), S(64)};
-        bool found = !mm().gamePath.empty();
-        float h = ease("card", hover(card) && !busy ? 1.f : 0.f, 12);
-        R.shadow(card, S(3), S(16), rgb(0, 0, 0, 0.5f));
-        R.gradV(card, rgb(22, 18, 17, 0.85f), rgb(10, 9, 9, 0.9f), S(3));
-        R.frame(card, lerp(goldDim.withA(0.4f), gold.withA(0.8f), h), S(1), S(3));
-        float dcx = card.x + S(24), dcy = card.y + card.h * 0.5f;
-        Col dc = found ? ember : blood;
-        R.glow(dcx, dcy, S(18), dc.withA(0.35f + 0.1f * std::sin(t * 3.f)));
-        R.diamond(dcx, dcy, S(5), dc);
-        R.text(R.heading, card.x + S(46), card.y + S(11), "папка игры", gold, S(3));
-        std::string sub = found ? pathUtf8(mm().gamePath) : "игра не найдена — нажми, чтобы указать папку";
-        R.text(R.caption, card.x + S(46), card.y + S(36), R.ellipsize(R.caption, sub, card.w - S(60)),
-               found ? parchDim.withA(0.8f) : blood);
-        if (click(card) && !busy) {
-            std::wstring pickTitle = L"Папка с " + mm().game->exe;
-            fs::path p = pickFolder(glfwGetWin32Window(win), pickTitle.c_str());
-            if (!p.empty()) {
-                if (isGameFolder(*mm().game, p)) {
-                    mm().setGamePath(p);
-                    addLog(LogLevel::Good, "Папка игры: " + pathUtf8(p));
-                } else {
-                    addLog(LogLevel::Error, "В этой папке нет " + toUtf8(mm().game->exe));
-                }
-            }
-        }
+        chrome(W, {});
+    }
 
-        chrome(W, card);
+    // Picks a game's folder by hand; false if it was cancelled or isn't the game's folder.
+    void pickGameFolder(ModManager& m)
+    {
+        std::wstring pickTitle = fromUtf8(tr("Папка с ", "Folder with ")) + m.game->exe;
+        fs::path p = pickFolder(glfwGetWin32Window(win), pickTitle.c_str());
+        if (p.empty()) return;
+        if (isGameFolder(*m.game, p)) {
+            m.setGamePath(p);
+            addLog(LogLevel::Good, m.game->name + ": " + pathUtf8(p));
+        } else {
+            addLog(LogLevel::Error, tr("В этой папке нет ", "This folder has no ") + toUtf8(m.game->exe));
+        }
     }
 
     // close / minimize and dragging the borderless window by its top strip
@@ -394,9 +441,30 @@ struct App {
         if (click(closeR)) startClose();
         if (click(minR)) startMinimize();
 
+        // settings: a gear of diamonds; it smoulders when a new DSM is out
+        Rect gearR{W - S(144), S(12), S(40), S(30)};
+        {
+            float hg = ease("gear", hover(gearR) || settingsOpen ? 1.f : 0.f, 16);
+            R.rect(gearR, rgb(255, 240, 220, 0.06f * hg), S(3));
+            Col gc = lerp(parchDim, parch, hg);
+            float gx = gearR.x + gearR.w * 0.5f, gy = gearR.y + gearR.h * 0.5f;
+            float spin = t * 0.4f * hg;
+            for (int k = 0; k < 8; ++k) {
+                float a = k * 0.785398f + spin;
+                R.diamond(gx + std::cos(a) * S(7), gy + std::sin(a) * S(7), S(1.8f), gc);
+            }
+            float rr = S(4.5f);
+            R.frame({gx - rr, gy - rr, rr * 2, rr * 2}, gc, S(1.2f), rr);
+            if (upd == Upd::Available) {
+                R.glow(gearR.r() - S(6), gearR.y + S(6), S(10), emberHot.withA(0.5f + 0.3f * std::sin(t * 3.f)));
+                R.diamond(gearR.r() - S(6), gearR.y + S(6), S(2.5f), emberHot);
+            }
+            if (click(gearR)) settingsOpen = !settingsOpen;
+        }
+
         // drag the borderless window by the header
         Rect drag{0, 0, W, S(100)};
-        if (pressed && drag.contains(mx, my) && !closeR.contains(mx, my) && !minR.contains(mx, my) &&
+        if (pressed && drag.contains(mx, my) && !closeR.contains(mx, my) && !minR.contains(mx, my) && !gearR.contains(mx, my) &&
             !keepOut.contains(mx, my) && !(cur >= 0 && titleHit.contains(mx, my))) {
             dragging = true;
             GetCursorPos(&dragCursor);
@@ -414,18 +482,18 @@ struct App {
 
     void modList(const Rect& pr)
     {
-        panel(pr, "моды");
+        panel(pr, tr("моды", "mods"));
         Rect area{pr.x + S(14), pr.y + S(52), pr.w - S(28), pr.h - S(66)};
         bool interactive = !busy;
 
         if (mm().mods.empty()) {
             float cy = area.y + area.h * 0.38f;
-            const char* l1 = "Здесь пока пусто.";
+            const char* l1 = tr("Здесь пока пусто.", "Nothing here yet.");
             R.text(R.big, pr.x + (pr.w - R.measure(R.big, l1)) * 0.5f, cy - S(40), l1, parch.withA(0.85f));
-            std::string l2 = "Положи мод в  mods\\" + mm().game->name + "\\<имя мода>\\files";
+            std::string l2 = tr("Положи мод в  mods\\", "Put a mod into  mods\\") + mm().game->name + tr("\\<имя мода>\\files", "\\<mod name>\\files");
             R.text(R.caption, pr.x + (pr.w - R.measure(R.caption, l2)) * 0.5f, cy + S(10), l2, parchDim);
             Rect b{pr.x + pr.w * 0.5f - S(110), cy + S(48), S(220), S(44)};
-            if (button("emptyOpen", b, "открыть папку", 0, interactive)) shellOpen(mm().modsDir.wstring());
+            if (button("emptyOpen", b, tr("открыть папку", "open folder"), 0, interactive)) shellOpen(mm().modsDir.wstring());
             return;
         }
 
@@ -481,9 +549,11 @@ struct App {
 
             // status on the right
             int dep = mm().deployedCount(m.folder);
-            bool upd = on && dep > 0 && mm().hasUpdate(m.folder);
-            std::string status = upd ? "есть обновление" : on ? (dep == 0 ? "ждёт применения" : "зажжён") : (dep > 0 ? "ещё в игре" : "угас");
-            Col sc = upd ? emberHot : on ? (dep == 0 ? gold : ember) : (dep > 0 ? gold : ash);
+            bool hasUpd = on && dep > 0 && mm().hasUpdate(m.folder);
+            std::string status = hasUpd ? tr("есть обновление", "update available")
+                                 : on ? (dep == 0 ? tr("ждёт применения", "waiting to apply") : tr("зажжён", "lit"))
+                                      : (dep > 0 ? tr("ещё в игре", "still in the game") : tr("угас", "faded"));
+            Col sc = hasUpd ? emberHot : on ? (dep == 0 ? gold : ember) : (dep > 0 ? gold : ash);
             float sw = R.measure(R.italic, status);
             float sx = row.r() - S(20) - arrowsW - sw;
             R.text(R.italic, sx, cy - S(14), status, sc);
@@ -493,8 +563,8 @@ struct App {
             if (on)
                 for (auto& c : mm().compatibility(m.folder)) {
                     if (!mm().enabled.count(c.other)) continue;
-                    if (c.declared) { mark = "несовместим"; break; }
-                    mark = "конфликт";
+                    if (c.declared) { mark = tr("несовместим", "incompatible"); break; }
+                    mark = tr("конфликт", "conflict");
                 }
             if (mark) {
                 float cw = R.measure(R.caption, mark);
@@ -507,14 +577,14 @@ struct App {
             std::string meta;
             if (!m.version.empty()) meta += "v" + m.version;
             if (!m.author.empty()) meta += (meta.empty() ? "" : "  ·  ") + m.author;
-            if (meta.empty()) meta = "без описания версии";
+            if (meta.empty()) meta = tr("без описания версии", "no version info");
             R.text(R.caption, nx, cy + S(5), R.ellipsize(R.caption, meta, maxW), parchDim.withA(0.75f));
 
             if (toggled) {
                 if (!on)
                     for (auto& c : mm().compatibility(m.folder))
                         if (c.declared && mm().enabled.count(c.other))
-                            addLog(LogLevel::Warn, "«" + m.name + "» не работает вместе с «" + mm().displayName(c.other) + "».");
+                            addLog(LogLevel::Warn, "«" + m.name + tr("» не работает вместе с «", "» doesn't work with «") + mm().displayName(c.other) + "».");
                 mm().setEnabled(m.folder, !on);
                 selected = i;
             } else if (hv && pressed && moveIdx < 0) {
@@ -524,7 +594,7 @@ struct App {
         R.setClip(nullptr);
 
         if (content + S(90) < area.h) {
-            const char* hint = "Новые моды кладутся в папку mods, затем «обновить список».";
+            const char* hint = tr("Новые моды кладутся в папку mods, затем «обновить список».", "Put new mods into the mods folder, then «refresh list».");
             float hw = R.measure(R.italic, hint);
             float hy = area.b() - S(34);
             divider(area.x + area.w * 0.5f, hy - S(16), S(90), 0.45f);
@@ -546,7 +616,7 @@ struct App {
 
     void details(const Rect& pr)
     {
-        panel(pr, "описание");
+        panel(pr, tr("описание", "description"));
         if (mm().mods.empty()) {
             const GameDef& g = *mm().game;
             float x = pr.x + S(30), w = pr.w - S(60), y = pr.y + S(56);
@@ -554,15 +624,15 @@ struct App {
             y += R.big.ascent + R.big.descent + S(10);
             divider(x + w * 0.5f, y, w * 0.5f, 1.f);
             y += S(20);
-            R.text(R.heading, x, y, g.realm, gold.withA(0.8f), S(2));
+            R.text(R.heading, x, y, g.realm.get(), gold.withA(0.8f), S(2));
             y += S(30);
-            R.text(R.italic, x, y, g.tagline, parchDim);
+            R.text(R.italic, x, y, g.tagline.get(), parchDim);
             y += S(44);
-            std::string where = "Моды для этой игры: mods\\" + g.name;
+            std::string where = tr("Моды для этой игры: mods\\", "Mods for this game: mods\\") + g.name;
             for (auto& l : R.wrap(R.body, where, w)) { R.text(R.body, x, y, l, parch.withA(0.8f)); y += S(26); }
             y += S(10);
             if (!g.warning.empty())
-                for (auto& l : R.wrap(R.caption, g.warning, w - S(16))) {
+                for (auto& l : R.wrap(R.caption, g.warning.get(), w - S(16))) {
                     R.diamond(x + S(3), y + S(10), S(2.5f), blood);
                     R.text(R.caption, x + S(14), y, l, blood);
                     y += S(22);
@@ -589,13 +659,16 @@ struct App {
         };
         bool on = mm().enabled.count(m.folder) > 0;
         int dep = mm().deployedCount(m.folder);
-        if (!m.version.empty()) rowKV("Версия", m.version, parch);
-        if (!m.author.empty()) rowKV("Автор", m.author, parch);
+        if (!m.version.empty()) rowKV(tr("Версия", "Version"), m.version, parch);
+        if (!m.author.empty()) rowKV(tr("Автор", "Author"), m.author, parch);
         std::string inst = mm().installedVersion(m.folder);
         if (dep && mm().hasUpdate(m.folder))
-            rowKV("Состояние", "в игре v" + (inst.empty() ? std::string("?") : inst) + ", нажми «обновить»", emberHot);
+            rowKV(tr("Состояние", "State"), tr("в игре v", "v") + (inst.empty() ? std::string("?") : inst) +
+                                            tr(", нажми «обновить»", " in the game, press «update»"), emberHot);
         else
-            rowKV("Состояние", dep ? "установлен" : (on ? "отмечен, нажми «применить»" : "не установлен"), dep ? ember : on ? gold : ash);
+            rowKV(tr("Состояние", "State"), dep ? tr("установлен", "installed") : (on ? tr("отмечен, нажми «применить»", "lit, press «apply»")
+                                                                         : tr("не установлен", "not installed")),
+                  dep ? ember : on ? gold : ash);
         y += S(8);
 
         // compatibility with the other mods: red when both are lit, dimmer when it only would matter if lit
@@ -610,18 +683,19 @@ struct App {
             y += S(6);
         };
         auto issues = mm().compatibility(m.folder);
-        if (issues.empty()) note("Совместим со всеми модами в списке.", gold.withA(0.75f));
+        if (issues.empty()) note(tr("Совместим со всеми модами в списке.", "Works with every mod in the list."), gold.withA(0.75f));
         for (auto& c : issues) {
             std::string other = "«" + mm().displayName(c.other) + "»";
             Col col = on && mm().enabled.count(c.other) ? blood : emberHot.withA(0.8f);
-            if (c.declared) note("Не работает вместе с " + other + ". Включай что-то одно.", col);
-            else note("Меняет те же файлы, что и " + other + ". Если включить оба, сработает тот, что ниже в списке.", col);
+            if (c.declared) note(tr("Не работает вместе с ", "Doesn't work with ") + other + tr(". Включай что-то одно.", ". Light only one of them."), col);
+            else note(tr("Меняет те же файлы, что и ", "Changes the same files as ") + other +
+                          tr(". Если включить оба, сработает тот, что ниже в списке.", ". With both lit, the one lower in the list wins."), col);
         }
         y += S(4);
 
         // the mod's own hotkeys in the game, as keycaps
         if (!m.keys.empty()) {
-            R.text(R.caption, x, y + S(2), "Клавиши", parchDim.withA(0.8f), S(1));
+            R.text(R.caption, x, y + S(2), tr("Клавиши", "Keys"), parchDim.withA(0.8f), S(1));
             float capsW = 0;  // actions line up after the widest key
             for (auto& [key, action] : m.keys) capsW = std::max(capsW, R.measure(R.caption, key) + S(18));
             for (auto& [key, action] : m.keys) {
@@ -638,7 +712,8 @@ struct App {
         }
 
         Rect openR{x, pr.b() - S(66), S(220), S(42)};
-        std::string desc = m.description.empty() ? "Описания нет. Его можно добавить в mod.json." : m.description;
+        std::string desc = m.description.empty() ? tr("Описания нет. Его можно добавить в mod.json.", "No description. It can be added in mod.json.")
+                                                 : m.description;
         for (auto& l : R.wrap(R.body, desc, w)) {
             if (y + S(29) > openR.y - S(10)) break;
             R.text(R.body, x, y, l, parch.withA(0.82f));
@@ -646,7 +721,7 @@ struct App {
         }
         R.setAlpha(1.f);
 
-        if (button("openMod", openR, "папка мода", 0, true)) shellOpen(m.root.wstring());
+        if (button("openMod", openR, tr("папка мода", "mod folder"), 0, true)) shellOpen(m.root.wstring());
     }
 
     void bottom(float W, float H)
@@ -667,15 +742,16 @@ struct App {
         }
         if (!mm().dirty && sel)
             action = mm().hasUpdate(sel->folder) ? Update : mm().deployedCount(sel->folder) ? Remove : Install;
-        const char* label = action == Update ? "обновить" : action == Remove ? "удалить" : action == Install ? "установить" : "применить";
+        const char* label = action == Update ? tr("обновить", "update") : action == Remove ? tr("удалить", "remove")
+                          : action == Install ? tr("установить", "install") : tr("применить", "apply");
         if (button("apply", {bx, by, w1, S(50)}, label, 1, ready && sel)) {
             if (action == Remove) mm().setEnabled(sel->folder, false);
             else if (action == Install) mm().setEnabled(sel->folder, true);
             runTask(false);
         }
-        if (button("restore", {bx + w1 + gap, by, w2, S(50)}, "вернуть оригинал", 0, ready && mm().deployedTotal() > 0))
+        if (button("restore", {bx + w1 + gap, by, w2, S(50)}, tr("вернуть оригинал", "restore original"), 0, ready && mm().deployedTotal() > 0))
             runTask(true);
-        if (button("play", {bx + w1 + w2 + gap * 2, by, w3, S(50)}, "играть", 0, ready && !mm().dirty))
+        if (button("play", {bx + w1 + w2 + gap * 2, by, w3, S(50)}, tr("играть", "play"), 0, ready && !mm().dirty))
             shellOpen(L"steam://rungameid/" + fromUtf8(mm().game->steamAppId));
 
         // left of the buttons: the latest message for a few seconds, otherwise the state
@@ -684,7 +760,8 @@ struct App {
         LogLine last;
         {
             std::lock_guard lock(logMx);
-            if (!log.empty()) last = log.back();
+            for (auto it = log.rbegin(); it != log.rend(); ++it)  // details of debug mode stay in the journal
+                if (it->level != LogLevel::Debug) { last = *it; break; }
         }
         float age = t - last.at;
         bool hasMsg = !last.text.empty() && age < 6.f;
@@ -698,23 +775,33 @@ struct App {
         }
         float stA = hasMsg ? 0.f : last.text.empty() ? 1.f : std::clamp((age - 6.f) / 0.5f, 0.f, 1.f);
         if (stA > 0.01f) {
-            if (busy) {
-                R.text(R.italic, sx, ly, "работаю…", emberHot.withA(stA * (0.7f + 0.3f * std::sin(t * 5.f))));
+            if (mm().gamePath.empty() && !busy) {
+                R.text(R.italic, sx, ly, tr("игра не найдена — укажи папку в настройках", "game not found — set its folder in the settings"),
+                       blood.withA(stA));
+            } else if (busy) {
+                R.text(R.italic, sx, ly, tr("работаю…", "working…"), emberHot.withA(stA * (0.7f + 0.3f * std::sin(t * 5.f))));
             } else if (!mm().dirty && std::any_of(mm().mods.begin(), mm().mods.end(),
                                                     [&](const ModInfo& m) { return mm().hasUpdate(m.folder); })) {
-                R.text(R.italic, sx, ly, "есть новая версия мода", ember.withA(stA * (0.65f + 0.35f * std::sin(t * 2.4f))));
+                R.text(R.italic, sx, ly, tr("есть новая версия мода", "a new mod version is here"), ember.withA(stA * (0.65f + 0.35f * std::sin(t * 2.4f))));
             } else if (mm().dirty) {
-                R.text(R.italic, sx, ly, "есть неприменённые изменения", ember.withA(stA * (0.65f + 0.35f * std::sin(t * 2.4f))));
+                R.text(R.italic, sx, ly, tr("есть неприменённые изменения", "there are changes to apply"), ember.withA(stA * (0.65f + 0.35f * std::sin(t * 2.4f))));
             } else {
-                R.text(R.italic, sx, ly, mm().deployedTotal() ? "всё применено" : "игра в оригинале",
+                R.text(R.italic, sx, ly, mm().deployedTotal() ? tr("всё применено", "everything applied") : tr("игра в оригинале", "the game is original"),
                        parchDim.withA(0.7f * stA));
             }
         }
         float lx = linksX;
-        lx -= R.measure(R.italic, "обновить список");
-        if (linkButton("refresh", lx, ly, "обновить список", !busy)) runSync();
-        lx -= S(26) + R.measure(R.italic, "папка модов");
-        if (linkButton("modsDir", lx, ly, "папка модов")) shellOpen(mm().modsDir.wstring());
+        const char* refreshL = tr("обновить список", "refresh list");
+        const char* modsL = tr("папка модов", "mods folder");
+        const char* journalL = tr("журнал", "journal");
+        lx -= R.measure(R.italic, refreshL);
+        if (linkButton("refresh", lx, ly, refreshL, !busy)) runSync();
+        lx -= S(26) + R.measure(R.italic, modsL);
+        if (linkButton("modsDir", lx, ly, modsL)) shellOpen(mm().modsDir.wstring());
+        if (settings.debug) {
+            lx -= S(26) + R.measure(R.italic, journalL);
+            if (linkButton("journal", lx, ly, journalL)) openJournal();
+        }
 
         if (busy || progress > 0.f) {
             float p = busy ? progress.load() : ease("progressOut", 0.f, 3);
@@ -768,18 +855,19 @@ struct App {
 
     void selection(float W, float H, bool interactive, int hideSigil = -1)
     {
-        const char* title = "Выбор мира";
+        const char* title = tr("Выбор мира", "Choose a world");
         float tw = R.measure(R.title, title, S(5));
         R.glow(W * 0.5f, S(70), tw, ember.withA(0.05f));
-        float hw = R.measure(R.heading, "менеджер модов", S(5));
-        R.text(R.heading, W * 0.5f - hw * 0.5f, S(26), "менеджер модов", gold, S(5));
+        const char* subtitle = tr("менеджер модов", "mod manager");
+        float hw = R.measure(R.heading, subtitle, S(5));
+        R.text(R.heading, W * 0.5f - hw * 0.5f, S(26), subtitle, gold, S(5));
         R.text(R.title, W * 0.5f - tw * 0.5f, S(48), title, parch, S(5));
         divider(W * 0.5f, S(112), S(220), 0.9f);
 
         const int n = (int)std::size(kQuotes);
         float period = 9.f, ph = std::fmod(t, period);
         float qa = std::min(1.f, std::min(ph / 1.2f, (period - ph) / 1.2f));
-        const char* q = kQuotes[int(t / period) % n];
+        const char* q = kQuotes[int(t / period) % n].get();
         R.text(R.italic, W * 0.5f - R.measure(R.italic, q) * 0.5f, S(126), q, parchDim.withA(0.8f * qa));
 
         const auto& list = games();
@@ -814,34 +902,35 @@ struct App {
             float nw = R.measure(R.big, g.name);
             R.text(R.big, cx - nw * 0.5f, y, g.name, lerp(parch, rgb(255, 240, 215), h));
             y += S(46);
-            float rw = R.measure(R.heading, g.realm, S(2));
-            R.text(R.heading, cx - rw * 0.5f, y, g.realm, gold.withA(0.8f), S(2));
+            float rw = R.measure(R.heading, g.realm.get(), S(2));
+            R.text(R.heading, cx - rw * 0.5f, y, g.realm.get(), gold.withA(0.8f), S(2));
             y += S(30);
-            float lw2 = R.measure(R.italic, g.tagline);
-            R.text(R.italic, cx - lw2 * 0.5f, y, g.tagline, parchDim);
+            float lw2 = R.measure(R.italic, g.tagline.get());
+            R.text(R.italic, cx - lw2 * 0.5f, y, g.tagline.get(), parchDim);
             y += S(42);
             divider(cx, y, r.w * 0.36f, 0.7f);
             y += S(22);
 
             bool found = !m.gamePath.empty();
-            std::string st = found ? "игра найдена" : "игра не найдена";
+            std::string st = found ? tr("игра найдена", "game found") : tr("игра не найдена", "game not found");
             float sw = R.measure(R.caption, st);
             R.diamond(cx - sw * 0.5f - S(12), y + S(10), S(3.5f), found ? g.theme.ember : ash);
             R.text(R.caption, cx - sw * 0.5f, y, st, found ? parch.withA(0.85f) : ash);
             y += S(26);
-            std::string mods = "модов: " + std::to_string(m.mods.size()) + "   ·   включено: " + std::to_string(m.enabled.size());
+            std::string mods = tr("модов: ", "mods: ") + std::to_string(m.mods.size()) + tr("   ·   включено: ", "   ·   lit: ") +
+                               std::to_string(m.enabled.size());
             float mw = R.measure(R.caption, mods);
             R.text(R.caption, cx - mw * 0.5f, y, mods, parchDim.withA(0.75f));
             y += S(34);
 
             if (!g.warning.empty())
-                for (auto& l : R.wrap(R.caption, g.warning, r.w - S(56))) {
+                for (auto& l : R.wrap(R.caption, g.warning.get(), r.w - S(56))) {
                     float ww = R.measure(R.caption, l);
                     R.text(R.caption, cx - ww * 0.5f, y, l, blood.withA(0.85f));
                     y += S(21);
                 }
 
-            const char* enter = "войти";
+            const char* enter = tr("войти", "enter");
             float ew = R.measure(R.button, enter, S(4));
             float ey = r.b() - S(46);
             R.text(R.button, cx - ew * 0.5f, ey, enter, lerp(goldDim, emberHot, h).withA(0.5f + 0.5f * h), S(4));
@@ -852,10 +941,17 @@ struct App {
             if (interactive && click(base) && appear > 0.5f) startRest(i, true, cx, r.y + S(118));
         }
 
-        const char* foot = "Моды каждой игры лежат в своей папке:  mods\\<игра>";
-        R.text(R.caption, W * 0.5f - R.measure(R.caption, foot) * 0.5f, H - S(46), foot, parchDim.withA(0.5f));
-        const char* ver = "v" DSM_VERSION;
-        R.text(R.caption, W - S(44) - R.measure(R.caption, ver, S(1)), H - S(46), ver, parchDim.withA(0.35f), S(1));
+        std::string ver = "v" DSM_VERSION;
+        bool newer = upd == Upd::Available;
+        if (newer) {
+            std::lock_guard lock(updMx);
+            ver += tr("   ·   доступна v", "   ·   v") + release.version + tr("", " is out");
+        }
+        float vw = R.measure(R.caption, ver, S(1));
+        Rect verR{W - S(44) - vw, H - S(46), vw, S(24)};
+        float hv = ease("verHover", newer && hover(verR) ? 1.f : 0.f, 14);
+        R.text(R.caption, verR.x, verR.y, ver, newer ? lerp(ember, emberHot, hv) : parchDim.withA(0.35f), S(1));
+        if (newer && click(verR)) settingsOpen = true;
         chrome(W, area);
     }
 
@@ -1010,15 +1106,244 @@ struct App {
         }
     }
 
+    // ------------------------------------------------------------ settings and journal windows
+
+    void cross(float cx, float cy, Col c)  // an x out of small diamonds: crisp at any scale
+    {
+        for (int k = -5; k <= 5; ++k) {
+            R.diamond(cx + S(float(k)), cy + S(float(k)), S(1.1f), c);
+            R.diamond(cx + S(float(k)), cy - S(float(k)), S(1.1f), c);
+        }
+    }
+
+    // The frame of a window over the screen: dims what is behind, closes on ×, Esc or a click outside.
+    // `wasOpen`: open since the previous frame, so the click that opened it doesn't close it again.
+    Rect modalFrame(float W, float H, Rect r, float a, const char* title, bool& open, bool wasOpen)
+    {
+        R.setAlpha(a);
+        R.rect({0, 0, W, H}, rgb(0, 0, 0, 0.72f));
+        r.y += S(14) * (1.f - a);
+        panel(r, title);
+        Rect closeR{r.r() - S(50), r.y + S(12), S(36), S(30)};
+        float hc = ease(std::string(title) + "x", hover(closeR) ? 1.f : 0.f, 16);
+        R.rect(closeR, blood.withA(0.45f * hc), S(3));
+        cross(closeR.x + closeR.w * 0.5f, closeR.y + closeR.h * 0.5f, lerp(parchDim, parch, hc));
+        if (open && (click(closeR) || escape || (wasOpen && pressed && !r.contains(mx, my)))) open = false;
+        return r;
+    }
+
+    void section(float x, float& y, float w, const char* title)
+    {
+        R.text(R.heading, x, y, title, gold, S(3));
+        float tw = R.measure(R.heading, title, S(3));
+        float ly = y + R.heading.ascent * 0.62f;
+        R.gradH({x + tw + S(14), ly, w - tw - S(14), S(1)}, gold.withA(0.35f), gold.withA(0));
+        y += S(36);
+    }
+
+    // one of a set of options: lit when chosen
+    bool chip(const std::string& id, const Rect& r, const std::string& label, bool on)
+    {
+        float h = ease(id, hover(r) ? 1.f : 0.f, 14);
+        float a = ease(id + "on", on ? 1.f : 0.f, 10);
+        R.rect(r, rgb(12, 10, 10, 0.9f), S(3));
+        if (a > 0.01f) {
+            R.gradV(r, ember.withA(0.20f * a), ember.withA(0.04f * a), S(3));
+            R.glow(r.x + r.w * 0.5f, r.y + r.h * 0.5f, r.w * 0.55f, ember.withA(0.07f * a));
+        }
+        R.frame(r, lerp(lerp(goldDim.withA(0.5f), gold.withA(0.9f), h), emberHot.withA(0.9f), a), S(1), S(3));
+        const Font& f = R.body;
+        float tw = R.measure(f, label);
+        R.text(f, r.x + (r.w - tw) * 0.5f, r.y + (r.h - (f.ascent + f.descent)) * 0.5f, label, lerp(parchDim, parch, std::max(h, a)));
+        return click(r) && !on;
+    }
+
+    void settingsWindow(float W, float H, float a, bool wasOpen)
+    {
+        float smx = mx, smy = my;
+        bool sp = pressed;
+        if (!settingsOpen) mx = my = -1, pressed = false;  // fading out: no more clicks
+
+        Rect r = modalFrame(W, H, {W * 0.5f - S(400), H * 0.5f - S(330), S(800), S(660)}, a, tr("настройки", "settings"), settingsOpen,
+                            wasOpen);
+        float x = r.x + S(40), w = r.w - S(80), y = r.y + S(64);
+
+        // language
+        section(x, y, w, tr("язык", "language"));
+        std::string autoL = std::string(tr("как в системе", "as in Windows")) + "  ·  " + (systemLang() == Lang::Ru ? "Русский" : "English");
+        std::pair<LangPref, std::string> opts[] = {{LangPref::Auto, autoL}, {LangPref::Ru, "Русский"}, {LangPref::En, "English"}};
+        float gap = S(12), cw = (w - gap * 2) / 3;
+        for (int i = 0; i < 3; ++i)
+            if (chip("lang" + std::to_string(i), {x + i * (cw + gap), y, cw, S(40)}, opts[i].second, settings.language == opts[i].first))
+                setLanguage(opts[i].first);
+        y += S(68);
+
+        // where each game is
+        section(x, y, w, tr("папки игр", "game folders"));
+        for (int i = 0; i < (int)games().size(); ++i) {
+            ModManager& m = *managers[i];
+            bool found = !m.gamePath.empty();
+            Rect pickR{x + w - S(150), y + S(2), S(150), S(38)};
+            R.diamond(x + S(4), y + S(13), S(3.5f), found ? games()[i].theme.ember : blood);
+            R.text(R.body, x + S(18), y, m.game->name, parch);
+            float textR = pickR.x - S(20);
+            if (!m.manualPath.empty()) {  // picked by hand: offer to go back to finding it through Steam
+                const char* autoLink = tr("найти через Steam", "find through Steam");
+                float lw = R.measure(R.italic, autoLink);
+                if (linkButton("auto" + games()[i].id, pickR.x - S(20) - lw, y + S(8), autoLink, !busy)) {
+                    m.autoGamePath();
+                    addLog(m.gamePath.empty() ? LogLevel::Warn : LogLevel::Good,
+                           m.game->name + ": " + (m.gamePath.empty() ? tr("в Steam не найдена", "not found in Steam") : pathUtf8(m.gamePath)));
+                }
+                textR = pickR.x - S(40) - lw;
+            }
+            std::string sub = !found ? tr("не найдена — укажи папку", "not found — choose its folder")
+                                     : pathUtf8(m.gamePath) + (m.manualPath.empty() ? tr("   ·   через Steam", "   ·   through Steam") : "");
+            R.text(R.caption, x + S(18), y + S(28), R.ellipsize(R.caption, sub, textR - x - S(18)), found ? parchDim.withA(0.8f) : blood);
+            if (button("pick" + games()[i].id, pickR, tr("выбрать", "choose"), 0, !busy)) pickGameFolder(m);
+            y += S(60);
+        }
+        y += S(8);
+
+        // DSM itself
+        section(x, y, w, tr("обновления", "updates"));
+        std::string status;
+        Col sc = parchDim;
+        std::string url;
+        {
+            std::lock_guard lock(updMx);
+            url = release.url;
+            switch (upd.load()) {
+            case Upd::Checking: status = tr("проверяю GitHub…", "checking GitHub…"); break;
+            case Upd::Latest: status = tr("это последняя версия", "this is the latest version"); sc = gold; break;
+            case Upd::Available:
+                status = tr("доступна v", "v") + release.version + tr("", " is out");
+                sc = emberHot;
+                break;
+            case Upd::Failed: status = tr("не удалось проверить: ", "couldn't check: ") + updErr; sc = blood; break;
+            default: break;
+            }
+        }
+        Rect updR{x + w - S(150), y - S(4), S(150), S(42)};
+        R.text(R.body, x, y + S(2), "DSM v" DSM_VERSION, parch);
+        float vx = x + R.measure(R.body, "DSM v" DSM_VERSION) + S(24);
+        R.text(R.italic, vx, y + S(4), R.ellipsize(R.italic, status, updR.x - vx - S(16)), sc);
+        if (upd == Upd::Available) {
+            if (button("updGet", updR, tr("скачать", "download"), 1)) shellOpen(fromUtf8(url));
+        } else if (button("updCheck", updR, tr("проверить", "check"), 0, upd != Upd::Checking)) {
+            checkUpdate();
+        }
+        y += S(66);
+
+        // debug mode
+        section(x, y, w, tr("режим отладки", "debug mode"));
+        if (bonfire("debugFire", x + S(18), y + S(16), settings.debug, true)) setDebug(!settings.debug);
+        R.text(R.body, x + S(50), y + S(2), settings.debug ? tr("включён", "on") : tr("выключен", "off"), settings.debug ? ember : parchDim);
+        float ty = y + S(36);
+        const char* about = tr("В программе появляется журнал с подробностями установки, а моды пишут свои логи (например, DSUEngine.log). "
+                               "Чтобы моды переключились, примени их заново.",
+                               "A journal with the details of every install appears in the app, and mods write their own logs "
+                               "(DSUEngine.log, for one). Apply the mods again so they switch too.");
+        for (auto& l : R.wrap(R.caption, about, w - S(50))) {
+            R.text(R.caption, x + S(50), ty, l, parchDim.withA(0.8f));
+            ty += S(22);
+        }
+
+        R.setAlpha(1.f);
+        mx = smx, my = smy, pressed = sp;
+    }
+
+    void journalWindow(float W, float H, float a, bool wasOpen)
+    {
+        float smx = mx, smy = my, sw = wheel;
+        bool sp = pressed;
+        bool live = journalOpen && !settingsOpen;  // under the settings: shown, but not touched
+        if (!live) mx = my = -1, pressed = false, wheel = 0;
+        bool esc = escape;
+        if (!live) escape = false;
+
+        Rect r = modalFrame(W, H, {S(60), S(60), W - S(120), H - S(120)}, a, tr("журнал", "journal"), journalOpen, wasOpen);
+        escape = esc;
+        Rect area{r.x + S(28), r.y + S(58), r.w - S(56), r.h - S(120)};
+
+        std::vector<LogLine> lines;
+        {
+            std::lock_guard lock(logMx);
+            lines.assign(log.begin(), log.end());
+        }
+        // wrapped rows: time only on the first row of a message
+        struct Row { std::string time, text; LogLevel level; };
+        std::vector<Row> rows;
+        float timeW = R.measure(R.caption, "00:00:00") + S(18);
+        for (auto& l : lines) {
+            bool first = true;
+            for (auto& part : R.wrap(R.caption, l.text, area.w - timeW - S(12))) {
+                rows.push_back({first ? l.time : "", part, l.level});
+                first = false;
+            }
+        }
+        const float rowH = S(23);
+        float content = rowH * rows.size();
+        float maxScroll = std::max(0.f, content - area.h);
+        if (hover(area) && wheel != 0) {
+            journalScroll = std::clamp(journalScroll - wheel * S(60), 0.f, maxScroll);
+            journalFollow = journalScroll >= maxScroll - S(2);
+        }
+        if (journalFollow) journalScroll = maxScroll;
+        journalScroll = std::min(journalScroll, maxScroll);
+
+        R.setClip(&area);
+        int firstRow = std::max(0, int(journalScroll / rowH));
+        for (int i = firstRow; i < (int)rows.size(); ++i) {
+            float ry = area.y + i * rowH - journalScroll;
+            if (ry > area.b()) break;
+            const Row& row = rows[i];
+            Col c = row.level == LogLevel::Good ? gold : row.level == LogLevel::Warn ? emberHot : row.level == LogLevel::Error ? blood
+                  : row.level == LogLevel::Debug ? parchDim.withA(0.75f) : parch.withA(0.9f);
+            if (!row.time.empty()) R.text(R.caption, area.x, ry, row.time, ash);
+            R.text(R.caption, area.x + timeW, ry, row.text, c);
+        }
+        if (rows.empty()) R.text(R.italic, area.x, area.y, tr("Пока пусто: примени или обнови моды.", "Empty for now: apply or refresh mods."), parchDim);
+        R.setClip(nullptr);
+        if (maxScroll > 0) {
+            float th = std::max(S(20), area.h * area.h / content), ty = area.y + (area.h - th) * (journalScroll / maxScroll);
+            R.rect({r.r() - S(12), ty, S(2), th}, gold.withA(0.35f), S(1));
+        }
+
+        // bottom: copy everything (for a bug report) and clear
+        float by = r.b() - S(50);
+        const char* copyL = tr("скопировать всё", "copy all");
+        const char* clearL = tr("очистить", "clear");
+        float lx = r.r() - S(40) - R.measure(R.italic, clearL);
+        if (linkButton("journalClear", lx, by, clearL, !busy)) {
+            std::lock_guard lock(logMx);
+            log.clear();
+        }
+        lx -= S(28) + R.measure(R.italic, copyL);
+        if (linkButton("journalCopy", lx, by, copyL, !lines.empty())) {
+            std::string text = "DSM v" DSM_VERSION "\n";
+            for (auto& l : lines) {
+                const char* lv = l.level == LogLevel::Debug ? "  " : l.level == LogLevel::Warn ? "! " : l.level == LogLevel::Error ? "x " : "- ";
+                text += l.time + " " + lv + l.text + "\n";
+            }
+            glfwSetClipboardString(win, text.c_str());
+            addLog(LogLevel::Info, tr("Журнал скопирован.", "Journal copied."));
+        }
+        if (busy) R.text(R.italic, r.x + S(40), by, tr("работаю…", "working…"), emberHot.withA(0.7f + 0.3f * std::sin(t * 5.f)));
+
+        R.setAlpha(1.f);
+        mx = smx, my = smy, pressed = sp, wheel = sw;
+    }
+
     void open(int i)
     {
         cur = i;
         selected = 0;
         scroll = scrollTarget = 0;
         mm().scan();
-        addLog(LogLevel::Info, mm().game->name + ": модов " + std::to_string(mm().mods.size()));
-        if (mm().gamePath.empty()) addLog(LogLevel::Warn, "Игра не найдена, укажи папку в карточке сверху.");
-        if (!mm().game->warning.empty()) addLog(LogLevel::Warn, mm().game->warning);
+        addLog(LogLevel::Info, mm().game->name + tr(": модов ", ": mods ") + std::to_string(mm().mods.size()));
+        if (mm().gamePath.empty()) addLog(LogLevel::Warn, tr("Игра не найдена, укажи папку в настройках.", "Game not found, set its folder in the settings."));
+        if (!mm().game->warning.empty()) addLog(LogLevel::Warn, mm().game->warning.get());
     }
 
     static float outCubic(float x)
@@ -1058,6 +1383,16 @@ struct App {
         float baseDy = S(22) * (1.f - oe) + S(16) * ce + S(10) * mp;
         R.setTransform(baseScale, baseDy);
         R.setMasterAlpha(content);
+
+        // while a window is open, the screen under it gets no input
+        bool settingsWas = settingsOpen, journalWas = journalOpen;
+        bool modal = settingsOpen || journalOpen;
+        float umx = mx, umy = my, uwheel = wheel;
+        bool upressed = pressed;
+        if (modal) mx = my = -1, pressed = false, wheel = 0;
+
+        if (rescanAll.exchange(false))
+            for (auto& m : managers) m->scan();
 
         if (resting) {
             // the screen we leave fades into the dark, the one we go to comes up in the new light
@@ -1101,6 +1436,13 @@ struct App {
                 startRest(cur, false, W * 0.5f, H * 0.45f);
             }
         }
+
+        if (modal) mx = umx, my = umy, pressed = upressed, wheel = uwheel;
+        float jo = ease("journalShow", journalOpen ? 1.f : 0.f, 12);
+        float so = ease("settingsShow", settingsOpen ? 1.f : 0.f, 12);
+        if (jo > 0.01f) journalWindow(W, H, jo, journalWas && !settingsOpen);
+        if (so > 0.01f) settingsWindow(W, H, so, settingsWas);
+        escape = false;
 
         R.setMasterAlpha(1.f);
         R.setTransform(1.f, 0.f);
@@ -1175,12 +1517,15 @@ int main(int argc, char** argv)
         return 0;
     }
     bool cli = argc > 1 && std::string(argv[1]) == "--cli";
+    AppSettings settings;
+    settings.load(exeDir());
+    setLang(settings.effectiveLang());  // before anything is said or scanned: mods read lang/<code>.json
 
     // Two managers touching the game folder at once would corrupt the backups.
     HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\DSM_DarkSoulsModManager");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         if (cli) {
-            printf("DSM уже запущен, закрой его и повтори.\n");
+            printf("%s\n", tr("DSM уже запущен, закрой его и повтори.", "DSM is already running, close it and try again."));
             return 4;
         }
         if (HWND other = FindWindowW(nullptr, L"DSM — Dark Souls")) {
@@ -1194,9 +1539,11 @@ int main(int argc, char** argv)
     App app;
     gApp = &app;
     app.root = exeDir();  // portable: data\ and mods\ sit next to DSM.exe, nothing goes elsewhere
+    app.settings = settings;
     for (auto& g : games()) {
         app.managers.push_back(std::make_unique<ModManager>());
         app.managers.back()->init(g, app.root);
+        app.managers.back()->setDebug(settings.debug);
     }
     for (int i = 1; i + 1 < argc; ++i)
         if (std::string(argv[i]) == "--game")
@@ -1223,6 +1570,12 @@ int main(int argc, char** argv)
         if (std::string(argv[i]) == "--pick-game") pickGame = std::stoi(argv[i + 1]);
         if (std::string(argv[i]) == "--back-at") backAt = std::stof(argv[i + 1]);
     }
+    bool forceCheck = false;  // debug: check for a new DSM even in a screenshot
+    for (int i = 1; i < argc; ++i) {  // debug: start with a window open (for screenshots)
+        if (std::string(argv[i]) == "--open-settings") app.settingsOpen = true;
+        if (std::string(argv[i]) == "--open-journal") app.journalOpen = true;
+        if (std::string(argv[i]) == "--check-update") forceCheck = true;
+    }
 
     if (!glfwInit()) return 1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -1248,7 +1601,7 @@ int main(int argc, char** argv)
     glfwGetWindowContentScale(app.win, &sx, &sy);
     app.s = sx;
     if (!app.R.init(app.s)) {
-        MessageBoxW(hwnd, L"Не удалось загрузить встроенные шрифты", L"DSM", MB_ICONERROR);
+        MessageBoxW(hwnd, fromUtf8(tr("Не удалось загрузить встроенные шрифты", "Couldn't load the built-in fonts")).c_str(), L"DSM", MB_ICONERROR);
         return 3;
     }
 
@@ -1265,7 +1618,11 @@ int main(int argc, char** argv)
     glfwSetWindowIconifyCallback(app.win, [](GLFWwindow*, int iconified) {
         if (!iconified) gApp->restored();
     });
+    glfwSetKeyCallback(app.win, [](GLFWwindow*, int key, int, int action, int) {
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) gApp->escape = true;
+    });
     app.shot = !shotPath.empty();
+    if (!app.shot || forceCheck) app.checkUpdate();  // DSM's own new version, quietly in the background
 
     // center on the primary monitor
     if (shotPath.empty()) {
@@ -1326,6 +1683,7 @@ int main(int argc, char** argv)
     }
 
     if (app.worker.joinable()) app.worker.join();
+    if (app.updThread.joinable()) app.updThread.join();
     glfwTerminate();
     CoUninitialize();
     CloseHandle(single);

@@ -60,17 +60,20 @@ const std::vector<GameDef>& games()
 {
     static const std::vector<GameDef> list = {
         {"dsr", "Dark Souls Remastered", L"DarkSoulsRemastered.exe", L"DARK SOULS REMASTERED", L"", "570940",
-         "Лордран  ·  2018", "Где всё началось.", "", themeDSR(), "LOGO_DSR",
+         {"Лордран  ·  2018", "Lordran  ·  2018"}, {"Где всё началось.", "Where it all began."}, {}, themeDSR(), "LOGO_DSR",
          // old parchment catching from a bonfire: an orange edge, sparks in the char
          {rgb(232, 110, 36), rgb(255, 214, 140), 5.f, 0.10f, 1.f}},
         {"ds3", "Dark Souls III", L"DarkSoulsIII.exe", L"DARK SOULS III", L"Game", "374320",
-         "Лотрик  ·  2016", "Где всё догорает.",
-         "Онлайн защищён EasyAntiCheat: моды только для игры оффлайн.", themeDS3(), "",
+         {"Лотрик  ·  2016", "Lothric  ·  2016"}, {"Где всё догорает.", "Where it all burns out."},
+         {"Онлайн защищён EasyAntiCheat: моды только для игры оффлайн.", "Online is guarded by EasyAntiCheat: mods are for offline play only."},
+         themeDS3(), "",
          // a page that has been burning for an age: flaky, a dull red edge, a wide band of ash
          {rgb(168, 50, 30), rgb(214, 160, 128), 8.5f, 0.17f, 0.45f}},
         {"er", "Elden Ring", L"eldenring.exe", L"ELDEN RING", L"Game", "1245620",
-         "Междуземье  ·  2022", "Где всё разбито.",
-         "EasyAntiCheat: только оффлайн. Файлы игра читает через ModEngine 2 (тестово).", themeER(), "",
+         {"Междуземье  ·  2022", "The Lands Between  ·  2022"}, {"Где всё разбито.", "Where it all shattered."},
+         {"EasyAntiCheat: только оффлайн. Файлы игра читает через ModEngine 2 (тестово).",
+          "EasyAntiCheat: offline only. Files load through ModEngine 2 (experimental)."},
+         themeER(), "",
          // gold leaf in grace: smooth sweeping edge, golden light, glittering
          {rgb(236, 180, 80), rgb(255, 244, 205), 3.2f, 0.05f, 1.5f}},
     };

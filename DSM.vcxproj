@@ -102,6 +102,8 @@
     <ClCompile Include="src\stb_impl.cpp" />
     <ClCompile Include="src\patch.cpp" />
     <ClCompile Include="src\remote.cpp" />
+    <ClCompile Include="src\i18n.cpp" />
+    <ClCompile Include="src\settings.cpp" />
     <ClCompile Include="external\miniz\miniz.c" />
   </ItemGroup>
   <ItemGroup>
@@ -113,6 +115,8 @@
     <ClInclude Include="src\version.h" />
     <ClInclude Include="src\patch.h" />
     <ClInclude Include="src\remote.h" />
+    <ClInclude Include="src\i18n.h" />
+    <ClInclude Include="src\settings.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="src\DSM.rc" />

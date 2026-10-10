@@ -1,4 +1,5 @@
 #pragma once
+#include "i18n.h"
 #include "render.h"
 #include "util.h"
 #include <string>
@@ -23,9 +24,9 @@ struct GameDef {
     std::wstring steamDir;   // default folder name under steamapps/common
     std::wstring subDir;     // where the exe lives inside it ("Game" for DS3 / Elden Ring); mods mirror this folder
     std::string steamAppId;
-    std::string realm;       // "Лордран · 2011"
-    std::string tagline;     // one quiet line on the selection card
-    std::string warning;     // anti-cheat / loader note, empty if none
+    Text realm;              // "Лордран · 2018"
+    Text tagline;            // one quiet line on the selection card
+    Text warning;            // anti-cheat / loader note, empty if none
     Theme theme;
     std::string logo;        // RCDATA name in src/DSM.rc (from assets/icons), empty: draw the generic sigil
     BurnStyle burn;          // how its screen burns in when you enter

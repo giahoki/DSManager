@@ -1,5 +1,7 @@
 #include "patch.h"
 
+#include "i18n.h"
+
 #include <cstring>
 #include <fstream>
 #include <json.hpp>
@@ -53,20 +55,20 @@ static const size_t kUnpackedAt = 0x1C, kPackedAt = 0x20;
 
 bool dcxUnpack(const Bytes& file, Bytes& header, Bytes& data, std::string& err)
 {
-    if (file.size() < 0x50 || std::memcmp(file.data(), "DCX\0", 4) != 0) { err = "не DCX"; return false; }
-    if (std::memcmp(file.data() + 0x28, "DFLT", 4) != 0) { err = "DCX не в формате DFLT"; return false; }
+    if (file.size() < 0x50 || std::memcmp(file.data(), "DCX\0", 4) != 0) { err = tr("не DCX", "not a DCX"); return false; }
+    if (std::memcmp(file.data() + 0x28, "DFLT", 4) != 0) { err = tr("DCX не в формате DFLT", "DCX is not DFLT"); return false; }
     size_t dca = 0;
     for (size_t i = 0x2C; i + 8 <= std::min<size_t>(file.size(), 0x100); ++i)
         if (std::memcmp(file.data() + i, "DCA\0", 4) == 0) { dca = i; break; }
-    if (!dca) { err = "в DCX нет блока DCA"; return false; }
+    if (!dca) { err = tr("в DCX нет блока DCA", "DCX has no DCA block"); return false; }
     size_t start = dca + be32(file, dca + 4);
-    if (start > file.size()) { err = "повреждённый DCX"; return false; }
+    if (start > file.size()) { err = tr("повреждённый DCX", "damaged DCX"); return false; }
 
     header.assign(file.begin(), file.begin() + start);
     data.resize(be32(file, kUnpackedAt));
     mz_ulong outLen = (mz_ulong)data.size();
     int rc = mz_uncompress(data.data(), &outLen, file.data() + start, (mz_ulong)(file.size() - start));
-    if (rc != MZ_OK || outLen != data.size()) { err = "не удалось распаковать DCX"; return false; }
+    if (rc != MZ_OK || outLen != data.size()) { err = tr("не удалось распаковать DCX", "couldn't unpack the DCX"); return false; }
     return true;
 }
 
@@ -115,7 +117,7 @@ bool makePatch(const Bytes& original, const Bytes& modified, std::string& patchJ
     Bytes hdrA, hdrB, a = original, b = modified;
     if (dcx && (!dcxUnpack(original, hdrA, a, err) || !dcxUnpack(modified, hdrB, b, err))) return false;
     if (a.size() != b.size()) {
-        err = "размеры файлов отличаются: такие патчи пока не поддерживаются";
+        err = tr("размеры файлов отличаются: такие патчи пока не поддерживаются", "the files differ in size: such patches aren't supported yet");
         return false;
     }
 
@@ -145,7 +147,7 @@ bool makePatch(const Bytes& original, const Bytes& modified, std::string& patchJ
 bool applyPatch(const std::string& patchJson, const Bytes& original, Bytes& result, std::string& err)
 {
     json j = json::parse(patchJson, nullptr, false);
-    if (j.is_discarded() || j.value("format", "") != "dsm-patch-1") { err = "не патч DSM"; return false; }
+    if (j.is_discarded() || j.value("format", "") != "dsm-patch-1") { err = tr("не патч DSM", "not a DSM patch"); return false; }
 
     bool dcx = j.value("dcx", false);
     Bytes header, data = original;
@@ -155,7 +157,7 @@ bool applyPatch(const std::string& patchJson, const Bytes& original, Bytes& resu
         return true;
     }
     if (data.size() != j.value("size", size_t(0)) || hashHex(hashBytes(data)) != j.value("base", "")) {
-        err = "файл игры изменён или другой версии — проверь целостность файлов в Steam";
+        err = tr("файл игры изменён или другой версии — проверь целостность файлов в Steam", "the game file is changed or another version: verify the game files in Steam");
         return false;
     }
 
@@ -163,12 +165,12 @@ bool applyPatch(const std::string& patchJson, const Bytes& original, Bytes& resu
     for (auto& e : j["edits"]) {
         size_t at = e[0].get<size_t>();
         if (!fromHex(e[1].get<std::string>(), chunk) || at + chunk.size() > data.size()) {
-            err = "повреждённый патч";
+            err = tr("повреждённый патч", "damaged patch");
             return false;
         }
         std::memcpy(data.data() + at, chunk.data(), chunk.size());
     }
-    if (hashHex(hashBytes(data)) != j.value("result", "")) { err = "патч применился неправильно"; return false; }
+    if (hashHex(hashBytes(data)) != j.value("result", "")) { err = tr("патч применился неправильно", "the patch applied wrongly"); return false; }
 
     result = dcx ? dcxPack(header, data) : data;
     return true;

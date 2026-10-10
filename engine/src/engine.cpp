@@ -560,11 +560,14 @@ static void hookContext(ID3D11DeviceContext* ctx, const char* what)
 
 // ---------------------------------------------------------------- device hooks
 
-enum DevIdx { kCreateVertexShader = 12, kCreatePixelShader = 15, kCreateComputeShader = 18, kCreateDeferredContext = 27 };
+enum DevIdx {
+    kCreateVertexShader = 12, kCreatePixelShader = 15, kCreateComputeShader = 18, kCreateSamplerState = 23, kCreateDeferredContext = 27
+};
 using PFN_CreateVS = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*, ID3D11VertexShader**);
 using PFN_CreatePS = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*, ID3D11PixelShader**);
 using PFN_CreateCS = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*, ID3D11ComputeShader**);
 using PFN_CreateDeferred = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, UINT, ID3D11DeviceContext**);
+using PFN_CreateSampler = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_SAMPLER_DESC*, ID3D11SamplerState**);
 
 static void registerShader(void* shader, const void* code, SIZE_T len, const char* kind)
 {
@@ -591,6 +594,38 @@ template <int K> static HRESULT STDMETHODCALLTYPE hkCreateComputeShader(ID3D11De
 {
     HRESULT hr = ((PFN_CreateCS)g_devClass[K].orig[kCreateComputeShader])(d, code, len, cl, out);
     if (SUCCEEDED(hr) && out && *out) registerShader(*out, code, len, "compute shader");
+    return hr;
+}
+
+// Material textures tile, post-processing reads clamp: only wrapping/mirroring linear samplers are surface
+// textures worth anisotropic filtering. Shadow (comparison) and min/max samplers are left alone.
+static bool upgradeSampler(D3D11_SAMPLER_DESC& d)
+{
+    if (g_cfg.anisotropy <= 1) return false;
+    bool linear = d.Filter == D3D11_FILTER_MIN_MAG_MIP_LINEAR || d.Filter == D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT
+                  || d.Filter == D3D11_FILTER_ANISOTROPIC;
+    auto tiles = [](D3D11_TEXTURE_ADDRESS_MODE m) { return m == D3D11_TEXTURE_ADDRESS_WRAP || m == D3D11_TEXTURE_ADDRESS_MIRROR; };
+    UINT aniso = UINT(std::clamp(g_cfg.anisotropy, 2, 16));
+    if (!linear || !(tiles(d.AddressU) || tiles(d.AddressV))) return false;
+    if (d.Filter == D3D11_FILTER_ANISOTROPIC && d.MaxAnisotropy >= aniso) return false;
+    d.Filter = D3D11_FILTER_ANISOTROPIC;
+    d.MaxAnisotropy = aniso;
+    d.MipLODBias = std::clamp(d.MipLODBias + g_cfg.lodBias, -16.0f, 15.99f);
+    return true;
+}
+
+template <int K> static HRESULT STDMETHODCALLTYPE hkCreateSamplerState(ID3D11Device* d, const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** out)
+{
+    auto fn = (PFN_CreateSampler)g_devClass[K].orig[kCreateSamplerState];
+    D3D11_SAMPLER_DESC up;
+    if (!desc || !out || t_inside) return fn(d, desc, out);
+    up = *desc;
+    if (!upgradeSampler(up)) return fn(d, desc, out);
+    HRESULT hr = fn(d, &up, out);
+    if (FAILED(hr)) return fn(d, desc, out);  // never break the game over a filter
+    static std::atomic<int> count{0};
+    int n = ++count;
+    if (n <= 4 || (n & (n - 1)) == 0) log("sampler -> %ux anisotropic (filter 0x%x, %d upgraded so far)", up.MaxAnisotropy, desc->Filter, n);
     return hr;
 }
 
@@ -682,7 +717,8 @@ void onDevice(ID3D11Device* device, IDXGISwapChain* swapChain)
 
     install(device, g_devClass,
             {DSU_HOOK(kCreateVertexShader, hkCreateVertexShader), DSU_HOOK(kCreatePixelShader, hkCreatePixelShader),
-             DSU_HOOK(kCreateComputeShader, hkCreateComputeShader), DSU_HOOK(kCreateDeferredContext, hkCreateDeferredContext)},
+             DSU_HOOK(kCreateComputeShader, hkCreateComputeShader), DSU_HOOK(kCreateSamplerState, hkCreateSamplerState),
+             DSU_HOOK(kCreateDeferredContext, hkCreateDeferredContext)},
             "device");
 
     ID3D11DeviceContext* imm = nullptr;

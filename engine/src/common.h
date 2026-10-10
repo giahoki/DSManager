@@ -30,7 +30,11 @@ struct Settings {
     bool enabled = true;
     int keyToggle = VK_F10;   // effects on/off
     int keyReload = VK_F11;   // re-read ini and recompile shaders
-    int debugView = 0;        // 0 off, 1 linear depth, 2 normals, 3 reflections only, 4 bloom only
+    int debugView = 0;        // 0 off, 1 linear depth, 2 normals, 3 reflections only, 4 bloom only, 5 AO only
+
+    // game textures: read once when the game creates its samplers, so a change needs a game restart
+    int anisotropy = 16;            // 0/1 = leave the game's filtering
+    float lodBias = 0.0f;           // added to the mip bias of upgraded samplers; < 0 sharper, may shimmer
 
     bool ssr = true;
     float ssrIntensity = 0.6f;
@@ -39,6 +43,13 @@ struct Settings {
     float ssrThickness = 0.6f;      // metres
     float ssrWallAmount = 0.0f;     // 0..1: reflections on walls, characters and other non-floor surfaces
     float ssrFresnelF0 = 0.04f;
+
+    bool ao = true;
+    float aoIntensity = 1.5f;       // power applied to visibility
+    float aoRadius = 1.2f;          // metres
+    int aoSlices = 2;
+    int aoSteps = 6;                // per side of a slice
+    float aoLightProtect = 0.5f;    // bright (lit, glowing) pixels lose AO: 0 = never, higher = sooner
 
     bool bloom = true;
     float bloomIntensity = 0.06f;
