@@ -18,6 +18,15 @@ struct ModInfo {
     std::vector<std::string> files;  // game-relative paths the mod sets, forward slashes, UTF-8
     std::set<std::string> patched;   // those of them built from patches/<path>.dsmpatch instead of files/
     uint64_t totalSize = 0;
+    std::vector<std::pair<std::string, std::string>> keys;  // mod.json "keys": key -> what it does in game
+    std::vector<std::string> incompatible;                  // mod.json "incompatible": folders or names of mods
+};
+
+// Why two mods may not work together: the author said so, and/or they ship the same game files.
+struct CompatIssue {
+    std::string other;     // folder of the other mod
+    bool declared = false; // listed in "incompatible" of either mod
+    int sharedFiles = 0;   // game files both of them replace
 };
 
 enum class LogLevel { Info, Good, Warn, Error };
@@ -50,6 +59,7 @@ public:
     bool hasUpdate(const std::string& folder) const;                 // in the game, and mod.json has another version
     size_t deployedTotal() const;
     std::string displayName(const std::string& folder) const;  // name from mod.json, else folder
+    std::vector<CompatIssue> compatibility(const std::string& folder) const;  // against every other mod in the list
 
     bool apply(const LogFn& log, std::atomic<float>* progress);
     bool restoreAll(const LogFn& log, std::atomic<float>* progress);

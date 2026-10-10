@@ -2,6 +2,7 @@
 #include "gl.h"
 #include "modmanager.h"
 #include "patch.h"
+#include "remote.h"
 #include "render.h"
 #include "version.h"
 
@@ -93,6 +94,7 @@ struct App {
     std::thread worker;
     std::atomic<bool> busy{false};
     std::atomic<float> progress{0};
+    std::atomic<int> rescan{-1};  // game whose mods folder the worker changed: rescanned on the main thread
     bool dragging = false;
     bool back = false;
     Theme live = selectionTheme();  // what is on screen now, eased towards the target theme
@@ -177,6 +179,23 @@ struct App {
             auto L = [this](LogLevel l, const std::string& m) { addLog(l, m); };
             if (restore) mm().restoreAll(L, &progress);
             else mm().apply(L, &progress);
+            busy = false;
+        });
+    }
+
+    // Local mods are rescanned at once; GitHub is checked in the background for new mods and newer versions.
+    void runSync()
+    {
+        if (busy) return;
+        if (worker.joinable()) worker.join();
+        mm().scan();
+        busy = true;
+        progress = 0;
+        addLog(LogLevel::Info, "Проверяю моды на GitHub…");
+        worker = std::thread([this, game = cur, m = &mm()] {
+            auto L = [this](LogLevel l, const std::string& msg) { addLog(l, msg); };
+            syncMods(*m->game, m->modsDir, L, &progress);
+            rescan = game;
             busy = false;
         });
     }
@@ -469,14 +488,18 @@ struct App {
             float sx = row.r() - S(20) - arrowsW - sw;
             R.text(R.italic, sx, cy - S(14), status, sc);
 
-            bool conflict = false;
+            // only between mods that are both lit: that's what will actually clash in the game
+            const char* mark = nullptr;
             if (on)
-                for (auto& f : m.files)
-                    if (mm().conflicts.count(f)) { conflict = true; break; }
-            if (conflict) {
-                float cw = R.measure(R.caption, "конфликт");
+                for (auto& c : mm().compatibility(m.folder)) {
+                    if (!mm().enabled.count(c.other)) continue;
+                    if (c.declared) { mark = "несовместим"; break; }
+                    mark = "конфликт";
+                }
+            if (mark) {
+                float cw = R.measure(R.caption, mark);
                 R.diamond(sx - cw - S(16), cy - S(1), S(3), blood);
-                R.text(R.caption, sx - cw - S(8), cy - S(10), "конфликт", blood);
+                R.text(R.caption, sx - cw - S(8), cy - S(10), mark, blood);
             }
 
             float nx = row.x + S(62), maxW = sx - nx - S(100);
@@ -488,6 +511,10 @@ struct App {
             R.text(R.caption, nx, cy + S(5), R.ellipsize(R.caption, meta, maxW), parchDim.withA(0.75f));
 
             if (toggled) {
+                if (!on)
+                    for (auto& c : mm().compatibility(m.folder))
+                        if (c.declared && mm().enabled.count(c.other))
+                            addLog(LogLevel::Warn, "«" + m.name + "» не работает вместе с «" + mm().displayName(c.other) + "».");
                 mm().setEnabled(m.folder, !on);
                 selected = i;
             } else if (hv && pressed && moveIdx < 0) {
@@ -571,21 +598,41 @@ struct App {
             rowKV("Состояние", dep ? "установлен" : (on ? "отмечен, нажми «применить»" : "не установлен"), dep ? ember : on ? gold : ash);
         y += S(8);
 
-        // conflicts first, they matter
-        std::map<std::string, int> with;
-        if (on)
-            for (auto& f : m.files) {
-                auto it = mm().conflicts.find(f);
-                if (it == mm().conflicts.end()) continue;
-                for (auto& o : it->second)
-                    if (o != m.folder) with[o]++;
-            }
-        for (auto& [other, n] : with) {
-            std::string line = "Конфликтует с «" + mm().displayName(other) + "». Главнее тот, что ниже в списке.";
-            for (auto& l : R.wrap(R.caption, line, w - S(16))) {
-                R.diamond(x + S(3), y + S(10), S(2.5f), blood);
-                R.text(R.caption, x + S(14), y, l, blood);
+        // compatibility with the other mods: red when both are lit, dimmer when it only would matter if lit
+        auto note = [&](const std::string& text, Col c) {
+            bool first = true;
+            for (auto& l : R.wrap(R.caption, text, w - S(16))) {
+                if (first) R.diamond(x + S(3), y + S(10), S(2.5f), c);
+                first = false;
+                R.text(R.caption, x + S(14), y, l, c);
                 y += S(22);
+            }
+            y += S(6);
+        };
+        auto issues = mm().compatibility(m.folder);
+        if (issues.empty()) note("Совместим со всеми модами в списке.", gold.withA(0.75f));
+        for (auto& c : issues) {
+            std::string other = "«" + mm().displayName(c.other) + "»";
+            Col col = on && mm().enabled.count(c.other) ? blood : emberHot.withA(0.8f);
+            if (c.declared) note("Не работает вместе с " + other + ". Включай что-то одно.", col);
+            else note("Меняет те же файлы, что и " + other + ". Если включить оба, сработает тот, что ниже в списке.", col);
+        }
+        y += S(4);
+
+        // the mod's own hotkeys in the game, as keycaps
+        if (!m.keys.empty()) {
+            R.text(R.caption, x, y + S(2), "Клавиши", parchDim.withA(0.8f), S(1));
+            float capsW = 0;  // actions line up after the widest key
+            for (auto& [key, action] : m.keys) capsW = std::max(capsW, R.measure(R.caption, key) + S(18));
+            for (auto& [key, action] : m.keys) {
+                float kw = R.measure(R.caption, key) + S(18);
+                Rect cap{x + S(130), y - S(2), kw, S(26)};
+                R.rect(cap, rgb(12, 10, 10, 0.9f), S(3));
+                R.frame(cap, gold.withA(0.55f), S(1), S(3));
+                R.text(R.caption, cap.x + S(9), cap.y + S(3), key, gold);
+                float ax = x + S(130) + capsW + S(12);
+                R.text(R.body, ax, y - S(3), R.ellipsize(R.body, action, x + w - ax), parch.withA(0.85f));
+                y += S(34);
             }
             y += S(6);
         }
@@ -665,10 +712,7 @@ struct App {
         }
         float lx = linksX;
         lx -= R.measure(R.italic, "обновить список");
-        if (linkButton("refresh", lx, ly, "обновить список", !busy)) {
-            mm().scan();
-            addLog(LogLevel::Info, "Найдено модов: " + std::to_string(mm().mods.size()));
-        }
+        if (linkButton("refresh", lx, ly, "обновить список", !busy)) runSync();
         lx -= S(26) + R.measure(R.italic, "папка модов");
         if (linkButton("modsDir", lx, ly, "папка модов")) shellOpen(mm().modsDir.wstring());
 
@@ -985,6 +1029,7 @@ struct App {
 
     void frame(float W, float H)
     {
+        if (int g = rescan.exchange(-1); g >= 0) managers[g]->scan();
         // open: the bonfire is lit, the panels rise out of the dark
         float op = std::clamp((t - openStart) / openDur, 0.f, 1.f), oe = outCubic(op);
         // close: everything sinks, the light pulls into one last ember
@@ -1106,7 +1151,8 @@ static bool runCli(App& app, int argc, char** argv)
     }
     if (cmd == "apply") return app.mm().apply(L, nullptr);
     if (cmd == "restore") return app.mm().restoreAll(L, nullptr);
-    printf("usage: DSM --cli status|apply|restore|enable <mod>|disable <mod>\n");
+    if (cmd == "sync") return syncMods(*app.mm().game, app.mm().modsDir, L, nullptr);
+    printf("usage: DSM --cli status|apply|restore|sync|enable <mod>|disable <mod>\n");
     return false;
 }
 

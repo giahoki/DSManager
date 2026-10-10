@@ -1,108 +1,207 @@
+<div align="center">
+
+<img src="assets/icons/logo_docs.jpg" alt="DSM" width="320">
+
 # DSM — Dark Souls Mod Manager
 
-On launch DSM opens a world selection screen: **Dark Souls Remastered**, **Dark Souls III** and **Elden Ring** (Steam). Each game has its own mods (`mods\<game>`) and its own backup (`data\<id>`).
+**Dark Souls Remastered** · **Dark Souls III** · **Elden Ring**
 
-Dark Souls III and Elden Ring are protected by EasyAntiCheat: mods for them are for offline play only. Elden Ring only reads loose files through ModEngine 2, so its support is still experimental.
+![version](https://img.shields.io/badge/version-1.0.1-b08d57?style=flat-square)
+![platform](https://img.shields.io/badge/platform-Windows%20x64-3a3a3a?style=flat-square)
+![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial-3a3a3a?style=flat-square)
 
-The interface is in Russian; the labels below are given in English with the Russian text in parentheses.
+</div>
 
-DSM is portable: it is a single `DSM.exe` (fonts and images are embedded). Everything it creates lives next to it; nothing is written to AppData or the registry:
+---
+
+Installing mods by hand usually goes like this: copy files into the game folder, forget which ones you replaced, then verify the game in Steam to undo it all. DSM does the copying for you and saves the original files before touching anything, so getting the clean game back is one button.
+
+It's a single `DSM.exe`. It doesn't write anything to AppData or the registry; everything it creates stays in its own folder.
+
+## ✦ What it does
+
+When you start DSM, you pick a game: Dark Souls Remastered, Dark Souls III or Elden Ring (the Steam versions). Each game has its own list of mods and its own backups.
+
+In the list, each mod has a bonfire next to it. Light it to turn the mod on, let it go out to turn it off, then press **Apply**. **Restore original** puts back every file DSM ever replaced.
+
+Click a mod to see its description, the keys it uses in the game, and whether it gets along with your other mods. If two lit mods change the same file, both get a "conflict" mark, and the one lower in the list wins. To change the order, hover over a mod and use the arrows. If a mod's author says it doesn't work with another mod, you'll see "incompatible" instead.
+
+**Refresh list** looks at the [mods in this repository](https://github.com/giahoki/DSManager/tree/main/mods) and downloads ones you don't have yet, plus newer versions of ones you do. It only downloads files that actually changed, so an update is usually quick. When a mod you've already installed gets updated, DSM tells you, and the main button turns into **Update**.
+
+Mods can also come as patches instead of full game files. More on that [below](#patches-instead-of-game-files).
+
+> [!WARNING]
+> Dark Souls III and Elden Ring use EasyAntiCheat. **Play modded only offline.**
+> Elden Ring only reads loose files through ModEngine 2, so support for it is still experimental.
+
+## ✦ Getting started
+
+1. Run the installer `DSM-Setup-<version>.exe`, or just put `DSM.exe` in any folder.
+2. Start it and pick your game. DSM looks for it through Steam. If it can't find it, click the game card at the top and choose the folder with the game's exe (for example, `DarkSoulsRemastered.exe`).
+3. Press **Refresh list** to get mods from GitHub, or put your own into `mods\<game name>\`.
+4. Light the mods you want, press **Apply**, then **Play**.
+
+The folder looks like this. You can move it anywhere, just move all of it together:
 
 ```
 DSM\
 ├─ DSM.exe
-├─ data\    what is enabled, what is installed, backups of the original game files
-└─ mods\    mods, per game
+├─ data\    which mods are on, what's installed, and the original game files
+└─ mods\    your mods, one folder per game
 ```
 
-The folder can be moved as a whole.
+> [!IMPORTANT]
+> Close the game before applying or restoring mods.
 
-When built from source, the exe ends up in `bin\`:
+## ✦ Making a mod
 
-- `mods\` lives in the project root and is copied to `bin\mods` on every build. Put new mods into the root `mods\`: the copy in `bin\` is lost when the build is cleaned.
-- `data\` lives next to the exe (`bin\data`). "Clean Solution" deletes `bin\` and `build\` entirely, including `data\`. Before cleaning, press "Restore original" ("вернуть оригинал") in DSM, otherwise the backups of the original game files are lost with it.
-
-## Adding a mod
+A mod is a folder. Whatever you put in its `files\` folder gets copied into the game folder at the same path:
 
 ```
 mods\
 └─ Dark Souls Remastered\
-   └─ Mod name\
-      ├─ mod.json        name, version, author, description (optional)
-      └─ files\          everything here is copied into the game folder under the same paths
+   └─ My Mod\
+      ├─ mod.json
+      └─ files\
 ```
 
-For example, `files\param\DrawParam\a10_DrawParam.parambnd.dcx` replaces `param\DrawParam\a10_DrawParam.parambnd.dcx` in the game, and `files\dxgi.dll` goes to the game's root folder.
+So `files\param\DrawParam\a10_DrawParam.parambnd.dcx` replaces that same file in the game, and `files\dxgi.dll` goes right next to the game's exe.
 
-`mod.json`:
+`mod.json` is optional. Without it the mod shows up under its folder name. With it you get a proper name, author and description, and DSM can track versions:
 
 ```json
 {
-  "name": "Name",
+  "name": "My Mod",
   "version": "1.0",
-  "author": "Author",
-  "description": "What the mod does."
+  "author": "You",
+  "description": "What the mod does.",
+  "keys": [
+    { "key": "F10", "action": "turn effects on or off" }
+  ],
+  "incompatible": ["Some Other Mod"]
 }
 ```
 
-After adding a mod, press "refresh list" ("обновить список") in the manager.
+When you release a new version, bump `version`. That's how DSM (and Refresh list) knows there's an update.
+
+`keys` and `incompatible` are optional too. List your mod's hotkeys in `keys`, and DSM shows them next to the description. In `incompatible`, name the mods yours doesn't work with, by folder or by name. You don't need to list mods that change the same files: DSM finds those on its own.
 
 ### Patches instead of game files
 
-So that a mod can be shared without any game files, a modified file can be replaced by a patch: it holds only your edits, and when applying, DSM takes the original file from the player's game and builds the modded one from it. DCX archives are patched unpacked, so the patch stays small.
+If your mod changes a few values inside a game file, sharing the whole file means sharing FromSoftware's content along with it. A patch stores only your changes. When a player applies the mod, DSM takes the file from their own game and applies your changes to it.
+
+Put patches in `patches\` instead of `files\`, at the same path plus `.dsmpatch`:
 
 ```
 mods\<game>\<mod>\patches\param\DrawParam\a10_DrawParam.parambnd.dcx.dsmpatch
 ```
 
-To make a patch: `DSM.exe --make-patch <original> <modified> <file.dsmpatch>`. If the player has a different version of the file, DSM reports that the patch does not fit it and breaks nothing.
+To make one, give DSM the original file and your edited version:
 
-## Using it
+```bash
+DSM.exe --make-patch <original> <modified> <file.dsmpatch>
+```
 
-- **The bonfire to the left of a mod** turns it on and off. On the right is its state: "lit" ("зажжён") — the mod is in the game, "faded" ("угас") — it is off, "awaiting apply" ("ждёт применения") / "still in game" ("ещё в игре") — the changes have not been applied yet.
-- **The arrows** (shown on hover) change the order. If two mods change the same file, the one lower in the list wins; such mods are marked as "conflict" ("конфликт").
-- **The main button** follows the state. With pending changes it is **Apply** ("применить"): installs the checked mods and removes the unchecked ones. Otherwise it acts on the mod selected in the list: **Install** ("установить"), **Remove** ("удалить") if it is in the game, or **Update** ("обновить") if the mod folder holds a newer version than the one installed.
-- **Updates**: DSM remembers which version of each mod it installed. When a mod's `mod.json` gets another `version`, the mod is marked "update available" ("есть обновление") until you update it.
-- **Restore original** ("вернуть оригинал") rolls every game file back to what it was before the mods and turns all mods off.
-- **Play** ("играть") launches the game through Steam.
-- The game card at the top: if the game was not found automatically, click it and pick the folder with `DarkSoulsRemastered.exe`.
+DCX archives are compared unpacked, so even a patch for a big archive is usually tiny. If a player's file is a different version than the one you made the patch from, DSM tells them the patch doesn't fit and doesn't touch the game.
 
-The game must be closed while the manager applies or restores mods.
+## ✦ Backups
 
-## Backups
+The first time DSM replaces a game file, it saves the original to `data\<game id>\backup\`, for example `data\dsr\backup\`. Restoring just copies those files back.
 
-Before replacing a game file, the manager copies the original to `data\dsr\backup\` (under the same paths as in the game). A file that already matches the modded one is not saved as an original. If Steam updated or restored a file, the manager notices and does not overwrite the new version with the old backup.
+A few things it's careful about:
 
-The state (what is enabled, what is installed) is kept in `data\dsr\state.json`.
+- If the file in the game is already the modded version (say, you'd copied it by hand before), DSM won't save it as the "original".
+- If Steam updates or repairs a file while a mod is on, DSM notices and won't overwrite the new file with the old backup.
 
-## Development
+Which mods are on and what's installed is stored in `data\<game id>\state.json`.
 
-- Visual Studio 2026, project `DSM.vcxproj` (x64, Release / Debug).
-- GLFW 3.4 + OpenGL 3.3, the interface is drawn from scratch: an SDF shader for panels, frames and glow, fonts via stb_truetype.
-- A new game is added with one line in `games()` in `src/game.cpp`.
-- Fonts and logos are embedded into the exe as resources (`src/DSM.rc`, sources in `assets/`). New logo: a file in `assets/icons`, an `RCDATA` line in `DSM.rc` and its name in the game's `logo` field.
-- The version is set in `src/version.h`; the installer (`DSM.iss`, Inno Setup 6) reads it from the built exe and puts `DSM-Setup-<version>.exe` into `dist\`.
-- Command line for testing: `DSM.exe --cli status|apply|restore|enable <mod>|disable <mod> [--game dsr|ds3|er]`.
-- `--game <id>` opens a game right away, skipping the selection screen.
-- Screenshot without a window: `DSM.exe --screenshot out.png --shot-time 3`.
+## ✦ Building from source
 
-## Third-party components
+You'll need Visual Studio 2026. Open `DSM.slnx` and build `DSM` in Release or Debug (x64). For the installer you'll also need Inno Setup 6.
 
-- GLFW — zlib/libpng license
-- stb_truetype, stb_image, stb_image_write — public domain / MIT
-- nlohmann/json — MIT
-- miniz — MIT
-- Cormorant Garamond and Cormorant SC fonts — SIL Open Font License
-- in the DS Upgrader mod: ReShade — BSD-3-Clause; SMAA and CAS from SweetFX, Glamarye Fast Effects, prod80 shaders, Deband — MIT
+The interface is drawn by hand with GLFW and OpenGL 3.3: one SDF shader draws all the panels, frames and glow, and stb_truetype renders the fonts.
 
-The full texts of all these licenses are in `THIRD-PARTY-LICENSES.md`. If you distribute DS Upgrader separately from DSM, include that file.
+<details>
+<summary><b>Where things end up after a build</b></summary>
 
-## License
+<br>
 
-DSM's code is licensed under **PolyForm Noncommercial 1.0.0** (`LICENSE.md`):
+The exe goes into `bin\`.
 
-- you may use, study, modify, build on and share it — for noncommercial purposes;
-- you may not sell DSM or works based on it, or use them for commercial purposes;
-- when distributing, keep `LICENSE.md` and the `Required Notice` line naming the author.
+- On every build, the `mods\` folder from the project root is copied to `bin\mods`. Add new mods to the root `mods\`: the copy in `bin\` gets deleted when you clean the build.
+- `data\` sits next to the exe, in `bin\data`.
 
-The license covers only DSM's own code and design. Third-party components keep their own licenses (listed above). Game names and logos (for example, `assets/icons/DS R logo.png`) belong to FromSoftware and Bandai Namco and are not covered by this license.
+> [!CAUTION]
+> "Clean Solution" deletes all of `bin\` and `build\`, including `data\` with the backups of your game files. Press **Restore original** in DSM before cleaning.
+
+</details>
+
+<details>
+<summary><b>Project notes</b></summary>
+
+<br>
+
+- To add a game, add one entry to `games()` in `src/game.cpp`.
+- Fonts and logos are built into the exe (`src/DSM.rc`, with the source files in `assets/`). To add a game logo, put the image in `assets/icons`, add an `RCDATA` line for it to `DSM.rc`, and put that name in the game's `logo` field.
+- The version number lives in `src/version.h`. The installer script (`DSM.iss`) reads it from the built exe and saves `DSM-Setup-<version>.exe` to `dist\`.
+- The DS Upgrader Engine mod has its own project in `engine/`. See [`engine/NOTES.md`](engine/NOTES.md).
+
+</details>
+
+<details>
+<summary><b>Command line for testing</b></summary>
+
+<br>
+
+Run DSM without a window. `--game` picks the game (`dsr`, `ds3` or `er`), and `sync` does the same thing as Refresh list:
+
+```bash
+DSM.exe --cli status|apply|restore|sync|enable <mod>|disable <mod> [--game dsr|ds3|er]
+```
+
+Open a game right away, skipping the selection screen:
+
+```bash
+DSM.exe --game ds3
+```
+
+Save a screenshot of the interface without opening a window:
+
+```bash
+DSM.exe --screenshot out.png --shot-time 3
+```
+
+</details>
+
+## ✦ Thanks
+
+DSM uses these projects:
+
+- [GLFW](https://www.glfw.org/) (zlib/libpng)
+- [stb_truetype, stb_image, stb_image_write](https://github.com/nothings/stb) (public domain / MIT)
+- [nlohmann/json](https://github.com/nlohmann/json) (MIT)
+- [miniz](https://github.com/richgel999/miniz) (MIT)
+- Cormorant Garamond and Cormorant SC fonts (SIL Open Font License)
+
+The DS Upgrader mod includes ReShade (BSD-3-Clause), plus SMAA and CAS from SweetFX, Glamarye Fast Effects, prod80 shaders and Deband (MIT).
+
+The full license texts are in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md). If you share DS Upgrader on its own, without DSM, include that file with it.
+
+## ✦ License
+
+DSM's code is licensed under **[PolyForm Noncommercial 1.0.0](LICENSE.md)**.
+
+| ✅ You may | ❌ You may not |
+|---|---|
+| use, study, modify, build on and share it for noncommercial purposes | sell DSM or works based on it, or use them commercially |
+
+If you share DSM or something based on it, keep `LICENSE.md` and the `Required Notice` line with the author's name.
+
+This license only covers DSM's own code and design. The projects listed above keep their own licenses. Game names and logos (like `assets/icons/DS R logo.png`) belong to FromSoftware and Bandai Namco and aren't covered by it.
+
+<div align="center">
+<br>
+
+*Praise the sun.* ☀
+
+</div>

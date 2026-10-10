@@ -78,6 +78,12 @@ void ModManager::scan()
                 m.version = j.value("version", "");
                 m.author = j.value("author", "");
                 m.description = j.value("description", "");
+                if (j.contains("keys") && j["keys"].is_array())
+                    for (auto& k : j["keys"])
+                        if (k.is_object()) m.keys.push_back({k.value("key", ""), k.value("action", "")});
+                if (j.contains("incompatible") && j["incompatible"].is_array())
+                    for (auto& s : j["incompatible"])
+                        if (s.is_string()) m.incompatible.push_back(s.get<std::string>());
             }
         }
         fs::path filesDir = m.root / "files";
@@ -125,6 +131,30 @@ std::string ModManager::displayName(const std::string& folder) const
 {
     const ModInfo* m = findMod(folder);
     return m ? m->name : folder;
+}
+
+std::vector<CompatIssue> ModManager::compatibility(const std::string& folder) const
+{
+    std::vector<CompatIssue> out;
+    const ModInfo* a = findMod(folder);
+    if (!a) return out;
+    auto lists = [](const ModInfo& x, const ModInfo& y) {
+        return std::any_of(x.incompatible.begin(), x.incompatible.end(),
+                           [&](const std::string& s) { return s == y.folder || s == y.name; });
+    };
+    for (auto& b : mods) {
+        if (b.folder == a->folder) continue;
+        CompatIssue c{b.folder, lists(*a, b) || lists(b, *a), 0};
+        // both lists are sorted (scan)
+        for (size_t i = 0, j = 0; i < a->files.size() && j < b.files.size();) {
+            int cmp = a->files[i].compare(b.files[j]);
+            if (cmp == 0) { ++c.sharedFiles; ++i; ++j; }
+            else if (cmp < 0) ++i;
+            else ++j;
+        }
+        if (c.declared || c.sharedFiles) out.push_back(c);
+    }
+    return out;
 }
 
 const ModInfo* ModManager::findMod(const std::string& folder) const

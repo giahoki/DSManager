@@ -57,7 +57,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(ProjectDir)external\glfw\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>glfw3.lib;opengl32.lib;gdi32.lib;user32.lib;shell32.lib;ole32.lib;advapi32.lib;dwmapi.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;gdi32.lib;user32.lib;shell32.lib;ole32.lib;advapi32.lib;dwmapi.lib;uuid.lib;winhttp.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- symbols (.pdb) only in Debug: Release ships nothing but the binary -->
       <GenerateDebugInformation Condition="'$(Configuration)'=='Debug'">true</GenerateDebugInformation>
       <GenerateDebugInformation Condition="'$(Configuration)'=='Release'">false</GenerateDebugInformation>
@@ -101,6 +101,7 @@
     <ClCompile Include="src\util.cpp" />
     <ClCompile Include="src\stb_impl.cpp" />
     <ClCompile Include="src\patch.cpp" />
+    <ClCompile Include="src\remote.cpp" />
     <ClCompile Include="external\miniz\miniz.c" />
   </ItemGroup>
   <ItemGroup>
@@ -111,6 +112,7 @@
     <ClInclude Include="src\util.h" />
     <ClInclude Include="src\version.h" />
     <ClInclude Include="src\patch.h" />
+    <ClInclude Include="src\remote.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="src\DSM.rc" />
